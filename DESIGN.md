@@ -55,8 +55,8 @@ flowchart LR
     RR --> UI["Charts + summary"]
 ```
 
-- **Engine** (`src/engine/`): pure TypeScript, no DOM, no React. Config (schema, parsing, validation), analyzer
-  (call graph, budget math, rules, mitigation) and simulator. Unit-tested with Vitest. The boundary is enforced by
+- **Engine** (`src/engine/`): pure TypeScript, no DOM, no React. Config (schema, parsing, validation, call graph),
+  analyzer (budget math, rules, mitigation) and simulator. Unit-tested with Vitest. The boundary is enforced by
   a test: no file under `src/engine/` may import React, charting, or anything outside `src/engine/`.
 - **UI** (`src/ui/`): React. Reads engine outputs only; holds no domain logic. The only place React is imported.
 - The analyzer reads **only the system config**. The simulator reads the system config and the scenario.
@@ -154,17 +154,33 @@ interface Scenario {
 
 ### 5.4 Validation
 
-Errors are reported with their field path, e.g. `services.orders.calls[1].timeoutMs`.
+Errors are reported with their field path, e.g. `services.orders.calls[1].timeoutMs`. All errors are collected in
+one pass. Validation runs in phases, and a later phase runs only when the earlier ones passed:
 
-- `version` is 1; every `to` names an existing service; no self-calls; the call graph is acyclic.
-- The entry service exists and has no incoming calls; every service is reachable from the entry.
-- Call names are unique within a service.
+1. **Fields:** types, ranges and required fields. Unknown fields are errors, so a typo such as `maxAttempt` is
+   caught instead of silently ignored.
+2. **References:** the entry and every `to` name existing services; no self-calls; call names are unique within a
+   service.
+3. **Call graph:** acyclic; the entry has no incoming calls; every service is reachable from the entry.
+
+The rules:
+
+- `version` is 1. YAML syntax errors, including duplicate keys, are reported with their line.
+- `services` has at least one service; `networkLatencyMs` ≥ 0.
+- Service and call names contain only letters, digits, `_` and `-`. Dots are excluded because call ids
+  (`caller.call`) and error paths use them as separators. Names are looked up as own properties, so a name such as
+  `constructor` never matches an inherited object key.
 - Ranges: `workers` integer ≥ 1; `queueCapacity` integer ≥ 0 or `unbounded`; `serviceTimeMs` > 0;
-  jitter in [0, 0.9]; `maxAttempts` integer ≥ 1; backoff `multiplier` ≥ 1, other backoff fields ≥ 0;
+  jitter in [0, 0.9]; `maxAttempts` integer ≥ 1; backoff `multiplier` ≥ 1, `baseMs` ≥ 0, `maxMs` ≥ `baseMs`;
   retry budget `ratio` in (0, 1], `maxTokens` ≥ 1; `observedP99Ms` > 0.
 - `timeoutMs` > rtt and `deadlineMs` > rtt, where rtt = 2 × `networkLatencyMs`.
-- Faults: `startMs` < `endMs` ≤ `durationMs`; the first fault starts at or after `warmupMs + windowMs`;
-  faults on the same service do not overlap; `latencyMultiplier` > 0; `errorRate` in [0, 1].
+- Scenario: `rps` > 0; `durationMs` > 0; 0 ≤ `warmupMs` < `durationMs`; `seed` an integer in [0, 2³² − 1]
+  (it feeds a 32-bit hash); `recovery.thresholdPct` in (0, 100]; `recovery.holdMs` ≥ `recovery.windowMs` (otherwise no
+  window fits in the hold and recovery would be trivially true). `bucketMs` (250), `recovery` (90, 1000, 3000) and `faults` (none) default
+  when omitted.
+- Faults: they name an existing service; `startMs` < `endMs` ≤ `durationMs`; the first fault starts at or after
+  `warmupMs + windowMs`; faults on the same service do not overlap (back-to-back is allowed);
+  `latencyMultiplier` > 0; `errorRate` in [0, 1].
 
 ## 6. Budget math
 
@@ -182,8 +198,9 @@ topological order. rtt = 2 × `networkLatencyMs`.
 | worstCase(call, n, t) | n × t + Σ effectiveBackoff delays for n − 1 retries, at their upper bound | rule 2, elapsedBefore |
 | floor(call) | multiplier × max(healthy(call), rtt + callee.observedP99Ms) | lowest safe timeout |
 | budget(S) | entry: deadlineMs − rtt; else min over incoming calls c of window(c); clamped at 0 | the time S really has |
-| window(c) | min(timeoutMs(c), share(c)) − rtt | the time the callee has for call c |
-| elapsedBefore(cᵢ) | svcMax(S) + Σ over j < i of min(worstCase(cⱼ), share(cⱼ)) | order-aware allocation |
+| window(c) | max(0, min(timeoutMs(c), share(c)) − rtt) | the time the callee has for call c |
+| available(S) | budget(S) − svcMax(S) | degenerate case (§7) |
+| elapsedBefore(cᵢ) | svcMax(S) + Σ over j < i of min(worstCase(cⱼ), max(0, share(cⱼ))) | order-aware allocation |
 | reserve(cᵢ) | Σ over j > i of floor(cⱼ) | keeps room for later calls |
 | share(cᵢ) | budget(S) − elapsedBefore(cᵢ) − reserve(cᵢ) | the time call cᵢ may use |
 | maxQueueWait(S) | queueCapacity / throughput(S); ∞ if unbounded | rule 5 |
@@ -193,8 +210,11 @@ Notes:
 - `worstCase` always uses `effectiveBackoff`, everywhere it appears: the backoff the call **will** have after
   mitigation. This prevents rule 3 from breaking a rule-2 fit.
 - Units: all formulas use milliseconds and requests/ms. Tables and the UI display throughput in requests/s.
-- Earlier calls count at `min(worstCase, share)`: an overrunning earlier call has its own finding, and later calls
-  are evaluated as if it were fixed. One bad call does not cascade findings onto every call after it.
+- Earlier calls count at `min(worstCase, max(0, share))`: an overrunning earlier call has its own finding, and later
+  calls are evaluated as if it were fixed. One bad call does not cascade findings onto every call after it, and a
+  negative share never gives time back to later calls.
+- Bringing an earlier call within its share can only grow the shares of later calls, so mitigating one sequential
+  call cannot create an overrun in the next.
 - If each call fits its share, all sequential calls together fit the service's budget, and every later call keeps
   at least its floor.
 - Worst-case values are for latency bounds; mean values are for capacity.
@@ -222,7 +242,7 @@ orders budget: 898 ms
 | # | Rule id | Flags when | Severity | Single mitigation |
 |---|---|---|---|---|
 | 1 | `retry-amplification` | A call has `maxAttempts > 1` and some call reachable below its callee also retries | high | This call's `maxAttempts` → 1; only the deepest layer retries |
-| 2 | `deadline-budget-overrun` | worstCase(call) > share(call) | high | timeout ≤ share: `maxAttempts` → largest n that fits. timeout > share and ⌊share⌋ ≥ ⌈floor⌉: `timeoutMs` → ⌊share⌋. Otherwise: none (unresolved) |
+| 2 | `deadline-budget-overrun` | worstCase(call) > share(call) | high | timeout ≤ share: `maxAttempts` → largest n that fits. timeout > share and share ≥ floor: `timeoutMs` → share (exact; the UI displays it rounded). Otherwise: none (unresolved) |
 | 3 | `unguarded-retries` | `maxAttempts > 1` and backoff, jitter or retry budget is missing: no `backoff` or `baseMs: 0` = no backoff; `jitter: none` = no jitter; no `retryBudget` = no budget | medium | Add what is missing: backoff 10 ms × 2 up to 100 ms (or `baseMs` → 10 if the object exists), `jitter: full`, retry budget ratio 0.1 with 10 tokens |
 | 4 | `missing-deadline-propagation` | `deadlinePropagation: false` | medium | Set it to `true` |
 | 5 | `dead-on-arrival-queue` | maxQueueWait(S) + healthy(S) > budget(S), including unbounded queues | high | `queueCapacity` → ⌊throughput × (budget − healthy) × 0.5⌋ (throughput in requests/ms), minimum 1. If budget ≤ healthy: none |
@@ -230,6 +250,16 @@ orders budget: 898 ms
 Degenerate case: if `budget(S) − svcMax(S) ≤ 0`, the analyzer emits one service-level `deadline-budget-overrun`
 finding ("local work alone exceeds the time this service has") with no mitigation, and skips rule 2 and rule 5
 for that service.
+
+Starved services: a service whose budget is 0 got no time from its callers, because a caller's share was at or
+below the round trip. Rules 2 and 5 skip it; the caller's own finding explains the cause. Without this, one
+upstream problem would produce an unresolvable finding on every service below it.
+
+Comparisons: rules compare times with a tolerance of 1e-9 ms (one shared helper), so a value that lands exactly on
+a boundary, such as a worst case equal to its share, is not flipped by floating-point noise.
+
+Mitigated timeouts are set to the exact share rather than rounded down: rounding would shrink the callee's window
+by up to 1 ms and could create a "new after mitigation" finding from rounding alone.
 
 A queue cap turns overflow into fast rejections, which callers retry. That is intended: a rejection costs almost
 nothing, while a stale queued request costs a full service time and is retried anyway. It is safe together with a
@@ -317,6 +347,16 @@ stateDiagram-v2
 - Local work = serviceTimeMs × uniform(1 − jitter, 1 + jitter) × the active fault's latency multiplier.
 - Dropped jobs cost no worker time.
 - Every failure (rejection, error, timeout, expired, downstream failure) is retryable; operations are idempotent.
+
+**Contracts shared with the budget math.** The analyzer's numbers (§6) assume the simulator behaves exactly like
+this; if either side changes, both must:
+
+- A job does its local work first, then its calls, in order.
+- An attempt's timeout covers the full round trip: the timer starts when the request is sent.
+- A callee's carried deadline is send time + attempt timeout − one-way latency, which leaves it exactly
+  `window = timeout − rtt`.
+- Local work is uniform in serviceTimeMs × [1 − jitter, 1 + jitter], so `svcMax` is its upper bound.
+- Backoff delays never exceed min(baseMs × multiplier^(k−1), maxMs).
 
 ### 9.2 One call, attempt by attempt
 
@@ -586,12 +626,16 @@ src/
   engine/                  pure TypeScript; nothing here imports React or code outside src/engine/
     config/
       schema.ts            input types (§5)
-      parse.ts             YAML text → plain object
-      validate.ts          plain object → typed config, or errors with field paths
+      result.ts            Result<T>: a value, or every ConfigError found
+      parse.ts             YAML text → plain value; syntax errors with their line
+      fieldReader.ts       typed field access that records errors with paths
+      validate.ts          plain value → typed config, in three phases (§5.4)
+      load.ts              loadSystem, loadScenario: parse + validate, for the UI
+      callGraph.ts         the call graph, shared by validation, the analyzer and the simulator
     analyzer/
       analyze.ts           entry point: analyze(config) → findings + budgets
-      callGraph.ts         topological order, reachability, callers
       budget.ts            latencies, throughput, floors, budgets, shares (§6) → Budgets
+      defaults.ts          recommended values (e.g. the default backoff), shared by budgets and rules
       finding.ts           Finding, Patch, Mitigation types
       rules/               one file per rule; index.ts exports RULES, a plain array
       mitigation/
