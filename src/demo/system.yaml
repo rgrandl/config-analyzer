@@ -1,0 +1,30 @@
+# system.yaml — demo system (DESIGN.md §11.1)
+# Each setting looks reasonable on its own; together they fail to recover from a short db slowdown.
+version: 1
+networkLatencyMs: 1
+entry: { service: api, deadlineMs: 1000 }
+services:
+  api:
+    workers: 200
+    queueCapacity: 1000
+    serviceTimeMs: 2
+    serviceTimeJitter: 0.5
+    deadlinePropagation: false
+    calls:
+      - { name: placeOrder, to: orders, timeoutMs: 900, maxAttempts: 3 }
+  orders:
+    workers: 200
+    queueCapacity: 1000
+    serviceTimeMs: 5
+    serviceTimeJitter: 0.5
+    deadlinePropagation: false
+    calls:
+      - { name: readStock, to: db, timeoutMs: 150, maxAttempts: 3 }
+      - { name: writeOrder, to: db, timeoutMs: 150, maxAttempts: 3 }
+  db:
+    workers: 4
+    queueCapacity: 1000
+    serviceTimeMs: 10
+    serviceTimeJitter: 0.5
+    deadlinePropagation: false
+    calls: []

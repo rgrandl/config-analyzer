@@ -1,0 +1,10 @@
+# scenario.yaml — demo traffic and fault (DESIGN.md §11.1)
+version: 1
+rps: 140 # 280 db requests/s against 400/s capacity: 70% utilized
+durationMs: 60000
+warmupMs: 2000
+bucketMs: 250
+seed: 42
+faults:
+  - { service: db, startMs: 10000, endMs: 20000, latencyMultiplier: 5 } # db capacity 400/s → 80/s
+recovery: { thresholdPct: 90, windowMs: 1000, holdMs: 3000 }
