@@ -2,6 +2,8 @@
 
 **Live app:** https://rgrandl.github.io/config-analyzer/
 
+![The demo after one click: outcome cards, the numbers side by side, and goodput over time. The original config never recovers from a 10 s db slowdown; the mitigated config recovers as soon as it ends](docs/results.png)
+
 In a system of services, each team tunes its own settings. Each choice can be reasonable on its own while the
 combination fails under stress: retries multiply across layers, callers give up before callees can answer, and
 queues fill with work nobody is waiting for. Such a failure can outlast its cause.
@@ -52,8 +54,8 @@ The analyzer and the simulator share one model of how services behave:
 - **Timeouts are per attempt** and cover the network round trip. The network adds a fixed one-way latency.
 - **Every failure is retryable** (rejection, error, timeout, dropped request) and operations are idempotent. End
   users send one attempt and never retry.
-- **Deadline propagation** means a service honors its caller's deadline, drops queued work that is already too late
-  at no cost, and passes the remaining time on.
+- **Deadline propagation** means a service drops queued work whose deadline has already passed, at no cost, and
+  passes the remaining time on to its own calls.
 - **Traffic** is random (Poisson) arrivals at a fixed rate. Service times vary uniformly around their mean.
 - **The analyzer uses worst cases** for latency (the longest service time, every attempt timing out, the full
   backoff) and means for capacity. Its healthy latencies ignore queueing; the simulator shows what queueing does.
@@ -72,7 +74,7 @@ The analyzer and the simulator share one model of how services behave:
   rates can reach that.
 - The timeout floor multiplier (2) is fixed in the UI.
 
-## Known quirks
+## Behavior worth knowing
 
 - **The mitigated config also serves almost nothing during the demo's fault.** Its db queue is capped for the db's
   healthy speed, so while the db is 5× slower, queued requests expire and are dropped. The mitigations change what
@@ -91,6 +93,16 @@ The analyzer and the simulator share one model of how services behave:
   of date, with a button to run again, rather than clearing them.
 - **Faults must end early enough to confirm recovery:** at or before the run's end minus the recovery hold minus the
   user deadline. The scenario validation says so when one does not.
+
+## What's next
+
+- **Import real configs:** read Envoy, Istio, Resilience4j or Spring settings instead of hand-written YAML.
+- **Circuit breakers and connection pools:** each as a new setting, rule and simulator mechanism.
+- **Adaptive or LIFO queues:** keep serving part of the traffic during an overload, where FIFO queues sized for
+  healthy speed serve almost nothing.
+- **A real-services backend to validate the simulator:** generate small services from the config, run them under
+  load with the same fault, and compare their metrics with the simulated ones.
+- **A CI check:** run the analyzer on config changes and fail on high-severity findings.
 
 ## Run locally
 

@@ -891,7 +891,7 @@ to GitHub Pages at `https://rgrandl.github.io/config-analyzer/`. Requires Settin
 
 **Deliberate simplifications:** one aggregated instance per service; sequential calls only; no connection pools,
 circuit breakers or hedging; all failures retryable; zero-cost drops; healthy latencies ignore queueing (the
-simulator checks the consequences). README.md lists these, with the known quirks, for readers of the app.
+simulator checks the consequences). README.md lists these, with the behavior worth knowing and what comes next, for readers of the app.
 
 ## 13. Extensions (placeholders)
 

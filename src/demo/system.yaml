@@ -7,7 +7,7 @@
 #     workers                requests a service works on at once; each holds a worker while it waits on calls
 #     queueCapacity          requests that can wait for a worker (a number, or unbounded); more are rejected
 #     serviceTimeMs          the service's own work per request; serviceTimeJitter 0.5 varies it by up to ±50%
-#     deadlinePropagation    honor the caller's deadline and pass it on, so stale work is dropped
+#     deadlinePropagation    drop queued work whose deadline has already passed, and pass the remaining time on
 #     calls                  made in order, one after another: timeoutMs per attempt, maxAttempts including
 #                            the first, and optionally backoff { baseMs, multiplier, maxMs, jitter } and
 #                            retryBudget { ratio, maxTokens }
