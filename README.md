@@ -24,10 +24,11 @@ npm run build      # production build into dist/
 
 ```
 src/
-  config/      input schema, parsing, validation
-  analyzer/    call graph, timing math, rules, findings, mitigation
-  simulator/   discrete-event simulator, run results, recovery
-  ui/          React components
-  demo/        demo system and scenario
-tests/         mirrors src/
+  engine/        pure TypeScript, no React (enforced by tests/engine/boundary.test.ts)
+    config/      input schema, parsing, validation
+    analyzer/    call graph, budget math, rules, findings, mitigation
+    simulator/   discrete-event simulator, metrics, run results, recovery
+  ui/            React components
+  demo/          demo system and scenario
+tests/           mirrors src/
 ```

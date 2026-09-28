@@ -55,9 +55,10 @@ flowchart LR
     RR --> UI["Charts + summary"]
 ```
 
-- **Engine** (`src/engine/`): pure TypeScript, no DOM. Parser, validator, graph and budget math, rules, mitigation,
-  simulator. Unit-tested with Vitest.
-- **UI** (`src/ui/`): React. Reads engine outputs only; holds no domain logic.
+- **Engine** (`src/engine/`): pure TypeScript, no DOM, no React. Config (schema, parsing, validation), analyzer
+  (call graph, budget math, rules, mitigation) and simulator. Unit-tested with Vitest. The boundary is enforced by
+  a test: no file under `src/engine/` may import React, charting, or anything outside `src/engine/`.
+- **UI** (`src/ui/`): React. Reads engine outputs only; holds no domain logic. The only place React is imported.
 - The analyzer reads **only the system config**. The simulator reads the system config and the scenario.
 
 ## 4. User journey
@@ -264,7 +265,7 @@ flowchart LR
     F --> G["Show: applied patches,<br/>still unresolved,<br/>new after mitigation"]
 ```
 
-**Field registry** — a plain table in code. Only these fields may be patched; anything else is a bug caught by a test.
+**Field registry** (`mitigation/patchableFields.ts`) — a plain table in code. Only these fields may be patched; anything else is a bug caught by a test.
 
 | Field | Level | Conservative direction | Merge when two patches collide |
 |---|---|---|---|
@@ -582,16 +583,40 @@ If calibration misses these, tune `rps`, db `workers` or the fault multiplier, a
 
 ```
 src/
-  engine/
-    types.ts          schema types
-    parse.ts          YAML → typed config + validation errors
-    graph.ts          topological order, reachability, budget math
-    registry.ts       field registry table
-    rules/            one file per rule; rules are a plain array
-    mitigate.ts       merge, apply, re-run once
-    sim/              arrivals.ts, rng.ts, heap.ts, policy.ts, simulator.ts, metrics.ts, recovery.ts
-  ui/                 App, Editor, GraphView, FindingsPanel, MitigationPanel, Charts
-  demo/               system.yaml, scenario.yaml
+  engine/                  pure TypeScript; nothing here imports React or code outside src/engine/
+    config/
+      schema.ts            input types (§5)
+      parse.ts             YAML text → plain object
+      validate.ts          plain object → typed config, or errors with field paths
+    analyzer/
+      analyze.ts           entry point: analyze(config) → findings + budgets
+      callGraph.ts         topological order, reachability, callers
+      budget.ts            latencies, throughput, floors, budgets, shares (§6) → Budgets
+      finding.ts           Finding, Patch, Mitigation types
+      rules/               one file per rule; index.ts exports RULES, a plain array
+      mitigation/
+        patchableFields.ts the field table (§8)
+        applyMitigations.ts merge, apply, re-run once → MitigationResult
+    simulator/
+      types.ts             Runner, RunResult, BucketMetrics, ArrivalSource, client-policy types
+      run.ts               the event loop: workers, queues, deadlines, faults
+      metrics.ts           bucket accounting: time slicing, utilization, wasted work
+      arrivals.ts          poissonArrivals
+      keyedRandom.ts       identity-keyed random draws (§9.3)
+      eventQueue.ts        binary heap ordered by (time, sequence)
+      clientPolicy.ts      attemptTimeout, afterFailure
+      recovery.ts          success ratio, baseline, recovered-at (§10.2)
+      summary.ts           numbers for the summary cards
+      compare.ts           compareRuns: shared arrivals, four runs
+  ui/
+    App.tsx                state: config text, analysis, selected findings, results
+    ConfigEditor.tsx       System and Scenario tabs, validation errors
+    CallGraphView.tsx      services, calls, finding badges
+    FindingsPanel.tsx      findings and patches; after Apply: applied, unresolved, new, mitigated YAML
+    ResultsPanel.tsx       summary cards and the four charts
+  demo/                    system.yaml, scenario.yaml, index.ts (raw-text import; outside the engine)
+  main.tsx
+tests/                     mirrors src/; tests/engine/boundary.test.ts enforces the engine boundary
 .github/workflows/deploy.yml
 ```
 
@@ -604,7 +629,8 @@ src/
 - Rules: a positive and a negative case each; throughput limited by a callee; rule 2 accounting for rule-3 backoff;
   a floor that binds (no mitigation); a "new after mitigation" case.
 - Demo: exactly the 12 findings of §11.3; 0 unresolved after one apply.
-- Registry: the never-raise invariant; patching an unlisted field fails.
+- Registry (`patchableFields`): the never-raise invariant; patching an unlisted field fails.
+- Boundary: no file under `src/engine/` imports React, charting, or code outside the engine.
 - Simulator: identical arrivals across runs; same config + seed gives identical metrics; matching per-request draws
   across configs; request conservation per service; wasted fraction never exceeds 1; success ratio stays high in a
   no-fault run; the acceptance criteria of §11.4.
@@ -632,7 +658,7 @@ Each entry names the seam it plugs into. Content to be written when the work is 
 
 ### 13.3 Parallel fan-out
 - Idea: allow `{ parallel: [...] }` groups in a call list; budget takes the max within a group.
-- Seam: `calls` schema, graph.ts budget walk, simulator call step.
+- Seam: `calls` schema, `budget.ts` budget walk, simulator call step.
 - Status: not started. Open questions: TBD.
 
 ### 13.4 More knobs: circuit breakers, connection pools, hedging, rate limiting, load shedding
