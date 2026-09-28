@@ -135,6 +135,7 @@ describe('validateScenario', () => {
     ['overlapping faults on one service', (s) => s.faults.push({ service: 'db', startMs: 15000, endMs: 25000, errorRate: 0.1 }), 'faults[1]', /overlaps faults\[0\]/],
     ['threshold above 100', (s) => (s.recovery.thresholdPct = 120), 'recovery.thresholdPct', /≤ 100/],
     ['hold shorter than the window', (s) => (s.recovery.holdMs = 500), 'recovery.holdMs', /≥ recovery.windowMs/],
+    ['window shorter than the 100 ms grid', (s) => (s.recovery.windowMs = 50), 'recovery.windowMs', /≥ 100/],
     ['seed beyond 32 bits', (s) => (s.seed = 2 ** 32), 'seed', /≤ 4294967295/],
   ])('rejects %s', (_name, breakIt, path, message) => {
     const raw = rawDemoScenario();

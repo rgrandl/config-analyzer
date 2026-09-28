@@ -2,6 +2,7 @@
 // Validation runs in phases: field shapes first, then references between services, then the call graph.
 // A later phase only runs when the earlier ones passed, so its checks can rely on well-formed input.
 import { CallGraph } from './callGraph';
+import { RECOVERY_GRID_MS } from './semantics';
 import { childPath, FieldReader } from './fieldReader';
 import { fail, ok, type Result } from './result';
 import type {
@@ -349,7 +350,8 @@ function readRecovery(r: FieldReader, raw: unknown): RecoveryConfig | undefined 
   if (!obj) return undefined;
   r.onlyKeys(obj, ['thresholdPct', 'windowMs', 'holdMs'], 'recovery');
   const thresholdPct = r.number(obj, 'thresholdPct', 'recovery', { greaterThan: 0, max: 100 });
-  const windowMs = r.number(obj, 'windowMs', 'recovery', { greaterThan: 0 });
+  // Shorter windows would leave gaps between the grid's window starts.
+  const windowMs = r.number(obj, 'windowMs', 'recovery', { min: RECOVERY_GRID_MS });
   const holdMs = r.number(obj, 'holdMs', 'recovery', { greaterThan: 0 });
   // Recovery checks the windows that start within [t, t + holdMs − windowMs]; a shorter hold leaves none.
   if (holdMs !== undefined && windowMs !== undefined && holdMs < windowMs) {

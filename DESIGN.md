@@ -57,7 +57,8 @@ flowchart LR
 
 - **Engine** (`src/engine/`): pure TypeScript, no DOM, no React. Config (schema, parsing, validation, call graph),
   analyzer (budget math, rules, mitigation) and simulator. Unit-tested with Vitest. The boundary is enforced by
-  a test: no file under `src/engine/` may import React, charting, or anything outside `src/engine/`.
+  a test: no file under `src/engine/` may import React, charting, or anything outside `src/engine/`, and the
+  analyzer and the simulator never import each other (what they share lives in `config/`).
 - **UI** (`src/ui/`): React. Reads engine outputs only; holds no domain logic. The only place React is imported.
 - The analyzer reads **only the system config**. The simulator reads the system config and the scenario.
 
@@ -87,11 +88,11 @@ flowchart TD
 2. The top finding reads: *"api → orders retries 3× and orders → db also retries 3×: up to 18 db attempts per user
    request. Recommended: set api → orders maxAttempts 3 → 1."*
 3. The user applies all mitigations. The panel lists 12 applied findings and **0 unresolved**.
-4. The user runs the simulation. The goodput chart shows the original collapsing at t=10 s and staying near zero
-   through t=60 s, while the mitigated line dips and recovers by about t=22 s.
+4. The user runs the simulation. The goodput chart shows both lines at about 140 requests/s before the fault and
+   near zero during it. When the fault ends at t = 20 s, the mitigated line jumps straight back to about 140/s, while
+   the original stays at 0 through t = 60 s (measured, seed 42; see §11.4).
 5. The user unchecks the deadline-propagation mitigations, re-applies and re-runs, and sees how recovery changes —
-   evidence of which mitigation matters. (Steps 4 and 5 describe expected behavior; the numbers are replaced with
-   measured values once the simulator runs.)
+   evidence of which mitigation matters.
 
 ## 5. Inputs
 
@@ -176,7 +177,8 @@ The rules:
 - `timeoutMs` > rtt and `deadlineMs` > rtt, where rtt = 2 × `networkLatencyMs`.
 - Scenario: `rps` > 0; `durationMs` > 0; 0 ≤ `warmupMs` < `durationMs`; `seed` an integer in [0, 2³² − 1]
   (it feeds a 32-bit hash); `recovery.thresholdPct` in (0, 100]; `recovery.holdMs` ≥ `recovery.windowMs` (otherwise no
-  window fits in the hold and recovery would be trivially true). `bucketMs` (250), `recovery` (90, 1000, 3000) and `faults` (none) default
+  window fits in the hold and recovery would be trivially true); `recovery.windowMs` ≥ 100 ms, one step of the
+  recovery grid, so consecutive windows leave no gaps. `bucketMs` (250), `recovery` (90, 1000, 3000) and `faults` (none) default
   when omitted.
 - Faults: they name an existing service; `startMs` < `endMs` ≤ `durationMs`; the first fault starts at or after
   `warmupMs + windowMs`; every fault ends at or before `durationMs − holdMs − entry.deadlineMs`, so recovery can
@@ -540,11 +542,28 @@ Computed from `RunResult.requests`, independent of bucket size.
 - **Baseline** = success ratio from `warmupMs` to the first fault's start.
 - **Recovered at** = the earliest t after the last fault ends such that every 1 s window of arrivals starting in
   [t, t + 2 s] (so covering [t, t + 3 s]) has a success ratio ≥ 90% of the baseline.
-- Candidate times t and window starts lie on a fixed 100 ms grid, independent of `bucketMs`.
-- Requests arriving in the last `deadlineMs` of the run have no final outcome and are excluded. If the hold cannot
-  be confirmed, the run reports **did not recover within the run**.
+- Candidate times t and window starts lie on a fixed 100 ms grid (`RECOVERY_GRID_MS` in `config/semantics.ts`),
+  independent of `bucketMs`. The hold also gets one window ending exactly at t + hold, so no part of it goes
+  unchecked when hold − window is not a multiple of the grid.
+- A window exactly at the threshold meets it (ratios are compared with a 1e-12 tolerance).
+- Windows with no arrivals are skipped, but at least one window in the hold must have arrivals, so a period of
+  silence never counts as recovered.
+- Requests arriving in the last `deadlineMs` of the run (before `endedAtMs`) have no final outcome and are
+  excluded, and the whole hold must fit before that point. If it cannot be confirmed, the run reports
+  **did not recover within the run**.
+- Without faults, or with a baseline of 0 (nothing succeeded before the fault, so there is nothing to recover to),
+  recovery is **not applicable**; the baseline is still reported.
+- If the run was **truncated** before recovery could be confirmed, the status is **unknown** rather than "not
+  recovered", since the missing part of the run might have shown either.
 
-Example: the mitigated run's windows reach ≥ 90% at t = 21.4 s and stay there → recovery time 1.4 s.
+Example (a unit test): requests fail until 21.5 s; the 1 s window starting at 21.4 s has exactly 90% successes,
+so the run recovers at 21.4 s, 1.4 s after a fault that ended at 20 s.
+
+The summary cards (`summarizeRun`) show, per run: success ratio and goodput before, during and after the faults;
+recovery; the lowest window ratio after warm-up; attempts, timeouts and the timeout fraction (false timeouts in a
+run without faults); the wasted fraction **per service** (an average across services is dominated by callers that
+hold workers while they wait: in the demo's original run it reads 6% overall while the db wastes 100%); and
+whether the run was truncated.
 
 ### 10.3 Layout
 
@@ -656,19 +675,40 @@ Re-run after applying all: 0 unresolved, 0 new.
 | mitigated placeOrder fits (900 ≤ 995) | 95 ms |
 | mitigated queues: api 521.5 ≤ 998, orders 466.5 ≤ 898, db 80 ≤ 148 | ≥ 68 ms |
 
-### 11.4 Expected behavior and acceptance criteria
+### 11.4 Measured behavior and acceptance criteria
 
-- **Original:** goodput collapses during the fault and stays near zero after it ends.
-- **Mitigated:** goodput drops during the fault (bounded by the db's reduced capacity) and recovers shortly after.
+Measured with the demo as written (no tuning was needed), seed 42:
 
-Acceptance, checked for seeds 1–5:
+| Run | Goodput before (2–10 s) | During (10–20 s) | After (20–60 s) | Success ratio after | Recovery |
+|---|---|---|---|---|---|
+| Original, with the fault | 139.4/s | 0.4/s | 0/s | 0.000 | did not recover |
+| Mitigated, with the fault | 139.4/s | 0.4/s | 143.7/s | 1.000 | at 20.0 s (0 s after the fault) |
+| Either, without the fault | 142.1/s | | | 1.000 | not applicable (no timeouts) |
 
-- The original does **not** recover within the run.
-- The mitigated config recovers within **5 s** of the fault ending.
-- With no fault, both configs stay above the recovery threshold after warm-up.
-- With no fault, the mitigated config has essentially zero timeouts.
+- **Original:** the db queue fills to its 1000 slots during the fault and stays full afterwards; the db spends all
+  of its time on requests whose callers are gone, and retries plus instant rejections keep refilling it. This is
+  the loop of §9.4, and it does not end.
+- **Mitigated, after the fault:** recovery is immediate. Expired work is dropped at no cost and the capped queues
+  are short, so the first requests after the fault already succeed.
+- **Mitigated, during the fault:** goodput is also near zero, not partial. The db queue cap (26) is sized for the
+  db's healthy 400 requests/s; at the faulted 80/s a full queue takes about 325 ms to drain, longer than the
+  148 ms the db has, so queued requests expire and are dropped. Keeping partial goodput under overload would need
+  an adaptive or LIFO queue, a possible extension (§13.4).
 
-If calibration misses these, tune `rps`, db `workers` or the fault multiplier, and update §11.
+Acceptance (`tests/engine/simulator/acceptance.test.ts`), checked for seeds 1–5, all met. The test first checks its
+preconditions (no run truncated, every baseline at least 99%), so the criteria cannot pass for the wrong reason,
+and it checks the mechanism as well as the outcome: in the original run, from 5 s after the fault to the end, the db
+queue stays full and at least 95% of the db's work is for callers that already gave up.
+
+| Criterion | Measured, seeds 1–5 |
+|---|---|
+| The original does **not** recover within the run | not recovered; success ratio after the fault 0.000 |
+| The mitigated config recovers within **5 s** of the fault ending | recovered at the fault's end (0 s) |
+| With no fault, both configs stay above the recovery threshold after warm-up | lowest window ratio 1.000 |
+| With no fault, the mitigated config has essentially zero timeouts (≤ 0.1% of attempts) | 0 timeouts |
+
+If a later change breaks these, tune `rps`, then the fault multiplier (neither changes any analyzer number), and
+update §11.
 
 ## 12. Build, test, deploy
 
@@ -685,7 +725,7 @@ src/
       validate.ts          plain value → typed config, in three phases (§5.4)
       load.ts              loadSystem, loadScenario: parse + validate, for the UI
       callGraph.ts         the call graph, shared by validation, the analyzer and the simulator
-      semantics.ts         formulas the analyzer and the simulator share (§9.1 contracts)
+      semantics.ts         formulas and constants the analyzer, validation and the simulator share (§9.1, §10.2)
     analyzer/
       analyze.ts           entry point: analyze(config) → Analysis (findings, budgets, graph)
       budget.ts            latencies, throughput, floors, budgets, shares (§6) → Budgets
@@ -705,9 +745,9 @@ src/
       keyedRandom.ts       identity-keyed random draws (§9.3)
       eventQueue.ts        binary heap ordered by (time, sequence)
       clientPolicy.ts      attemptTimeout, afterFailure
-      recovery.ts          success ratio, baseline, recovered-at (§10.2)
-      summary.ts           numbers for the summary cards
-      compare.ts           compareRuns: shared arrivals, four runs
+      recovery.ts          ArrivalWindows (success ratio by arrival), computeRecovery, lowestWindowRatio (§10.2)
+      summary.ts           summarizeRun: the numbers for the summary cards
+      compare.ts           compareRuns: arrivals generated once, four runs, each with its summary
   ui/
     App.tsx                state: config text, analysis, selected findings, results
     ConfigEditor.tsx       System and Scenario tabs, validation errors
@@ -762,8 +802,9 @@ Each entry names the seam it plugs into. Content to be written when the work is 
 - Seam: `calls` schema, `budget.ts` budget walk, simulator call step.
 - Status: not started. Open questions: TBD.
 
-### 13.4 More knobs: circuit breakers, connection pools, hedging, rate limiting, load shedding
-- Idea: one schema field, one rule, one simulator mechanism per knob.
+### 13.4 More knobs: circuit breakers, connection pools, hedging, rate limiting, load shedding, adaptive queues
+- Idea: one schema field, one rule, one simulator mechanism per knob. Adaptive or LIFO queues would keep partial
+  goodput during an overload, which FIFO queues sized for healthy throughput do not (§11.4).
 - Seam: field registry rows, rules array, client policy functions (`attemptTimeout`, `afterFailure`).
 - Status: not started. Open questions: TBD.
 

@@ -33,3 +33,9 @@ export function localWorkMaxMs(service: ServiceConfig): Ms {
 export function carriedDeadlineMs(sentAtMs: Ms, attemptTimeoutMs: Ms, networkLatencyMs: Ms): Ms {
   return sentAtMs + attemptTimeoutMs - networkLatencyMs;
 }
+
+/**
+ * Recovery (DESIGN.md §10.2) checks windows whose starts lie on this grid, independent of bucketMs. Validation
+ * requires recovery.windowMs to be at least one grid step, so consecutive windows leave no gaps.
+ */
+export const RECOVERY_GRID_MS = 100;
