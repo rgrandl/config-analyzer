@@ -109,7 +109,7 @@ function SummaryTable({ comparison, scenario }: { readonly comparison: Compariso
         ]
       : [{ label: 'Success', value: (r: RunPair) => percent(r.withFaults.summary.successRatio.before) }]),
     {
-      label: 'Timeouts without the fault',
+      label: 'False timeouts (run without the fault)',
       value: (r: RunPair) =>
         `${r.withoutFaults.summary.timeouts.toLocaleString('en-US')} (${formatNumber(r.withoutFaults.summary.timeoutFraction * 100)}% of attempts)`,
     },
@@ -117,7 +117,10 @@ function SummaryTable({ comparison, scenario }: { readonly comparison: Compariso
   ];
   return (
     <table className="summary">
-      <caption>Measured on the same traffic{hasFaults ? ', with the fault' : ''}; timeouts come from a second run without it.</caption>
+      <caption>
+        Measured on the same traffic{hasFaults ? ', with the fault' : ''}. False timeouts come from a second run without the
+        fault: any there mean a timeout is set too tight.
+      </caption>
       <thead>
         <tr>
           <th scope="col" />

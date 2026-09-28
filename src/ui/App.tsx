@@ -317,7 +317,7 @@ function shortcutLabel(isDemo: boolean, selected: number, fixable: number): stri
   if (selected === 0) return 'Shortcut: simulate the config';
   const fixes = selected === 1 ? 'fix' : 'fixes';
   const which = selected === fixable ? `all ${selected}` : `${selected} selected`;
-  return `${isDemo ? 'Quick demo' : 'Shortcut'}: apply ${which} ${fixes} and simulate`;
+  return `${isDemo && selected === fixable ? 'Quick demo' : 'Shortcut'}: apply ${which} ${fixes} and simulate`;
 }
 
 /** The hook: how many findings, how many high, and on which services. */

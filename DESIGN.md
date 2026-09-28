@@ -635,7 +635,8 @@ resilience settings: timeouts, retries, backoff, deadlines and queues."
    "After db was slowed 5× from 10 to 20 s:"
    [Original config: Did not recover, 0% succeed after]   [Mitigated config: Recovered immediately, 100%]
    Summary table: Original | Mitigated — success before / during / after, goodput after, recovery
-                  ("immediately" or "N s after it ended"), timeouts without the fault, wasted work at <the
+                  ("immediately" or "N s after it ended"), false timeouts (run without the fault: any mean a
+                  timeout is set too tight), wasted work at <the
                   service that wastes the most in the original run>
    Two-sentence note when the mitigated line is also near zero during the fault: "Both configs serve almost
    nothing while db is slowed; that is expected. The difference is what happens after the fault ends at 20 s."

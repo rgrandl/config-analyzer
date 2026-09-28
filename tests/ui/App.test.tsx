@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { App } from '../../src/ui/App';
-import { runInProcess } from '../../src/ui/simulation';
+import { runInProcess, type RunSimulation, type SimulationInput } from '../../src/ui/simulation';
 
 // jsdom has no layout; the charts only need ResizeObserver to exist.
 beforeAll(() => {
@@ -78,4 +78,27 @@ describe('App', () => {
     expect(screen.getByRole('row', { name: /^Recovery/ }).textContent).toBe('Recoverydid not recoverimmediately');
     expect(screen.getByTestId('during-fault-note')).toBeTruthy();
   }, 60_000);
+
+  it('simulates exactly the selected fixes when only some are selected', () => {
+    // Plan: select none, then only the db queue finding, and click the top button with a runner that records
+    //   its input and never finishes.
+    // Verifies: the button no longer says "Quick demo"; the mitigated config has only db's queue capped (26),
+    //   everything else as in the original; the original config is unchanged.
+    const inputs: SimulationInput[] = [];
+    const recording: RunSimulation = (input) => {
+      inputs.push(input);
+      return new Promise(() => {});
+    };
+    render(<App runSimulation={recording} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Select none' }));
+    fireEvent.click(screen.getByLabelText(/Apply the mitigation for: A full db queue/));
+    fireEvent.click(screen.getByRole('button', { name: 'Shortcut: apply 1 selected fix and simulate' }));
+
+    const [input] = inputs;
+    expect(input?.mitigated.services.db).toEqual({ ...input?.original.services.db, queueCapacity: 26 });
+    expect({ ...input?.mitigated, services: { ...input?.mitigated.services, db: input?.original.services.db } }).toEqual(
+      input?.original,
+    );
+    expect(input?.original.services.db?.queueCapacity).toBe(1000);
+  });
 });
