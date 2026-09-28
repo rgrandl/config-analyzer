@@ -254,7 +254,7 @@ export function validateScenario(raw: unknown, system: SystemConfig): Result<Sce
   const scenario = readScenario(reader, raw, system);
   if (!scenario || reader.errors.length > 0) return fail(reader.errors);
 
-  checkFaultWindows(reader, scenario);
+  checkFaultWindows(reader, scenario, system);
   return reader.errors.length > 0 ? fail(reader.errors) : ok(scenario);
 }
 
@@ -325,6 +325,12 @@ function readFault(
   if (endMs !== undefined && durationMs !== undefined && endMs > durationMs) {
     r.error(childPath(path, 'endMs'), `must be ≤ durationMs (${durationMs})`);
   }
+  if (obj.latencyMultiplier === undefined && obj.errorRate === undefined) {
+    r.error(path, 'must set latencyMultiplier or errorRate');
+  } else if (latencyMultiplier !== undefined || errorRate !== undefined) {
+    const changesSomething = (latencyMultiplier ?? 1) !== 1 || (errorRate ?? 0) > 0;
+    if (!changesSomething) r.error(path, 'has no effect: set latencyMultiplier ≠ 1 or errorRate > 0');
+  }
   if (service === undefined || startMs === undefined || endMs === undefined) return undefined;
   return {
     service,
@@ -351,19 +357,32 @@ function readRecovery(r: FieldReader, raw: unknown): RecoveryConfig | undefined 
   return { thresholdPct, windowMs, holdMs };
 }
 
-/** Faults leave room for a baseline before the first one, and faults on one service do not overlap. */
-function checkFaultWindows(r: FieldReader, scenario: Scenario): void {
+/**
+ * Faults leave room for a baseline before the first one and for confirming recovery after the last one,
+ * and faults on one service do not overlap.
+ */
+function checkFaultWindows(r: FieldReader, scenario: Scenario, system: SystemConfig): void {
   const earliestStart = scenario.warmupMs + scenario.recovery.windowMs;
+  // Recovery after a fault ending at `end` is confirmed over [end, end + holdMs], using requests that arrived
+  // there; those need up to deadlineMs to finish. The hold already contains every window it checks.
+  const latestEnd = scenario.durationMs - scenario.recovery.holdMs - system.entry.deadlineMs;
   scenario.faults.forEach((fault, index) => {
+    const path = childPath('faults', index);
     if (fault.startMs < earliestStart) {
       r.error(
-        childPath(childPath('faults', index), 'startMs'),
+        childPath(path, 'startMs'),
         `must be ≥ warmupMs + recovery.windowMs (${earliestStart}) so a baseline can be measured`,
+      );
+    }
+    if (fault.endMs > latestEnd) {
+      r.error(
+        childPath(path, 'endMs'),
+        `must be ≤ durationMs − recovery.holdMs − entry.deadlineMs (${latestEnd}) so recovery can be confirmed`,
       );
     }
     scenario.faults.slice(0, index).forEach((other, otherIndex) => {
       if (other.service === fault.service && fault.startMs < other.endMs && other.startMs < fault.endMs) {
-        r.error(childPath('faults', index), `overlaps faults[${otherIndex}] on service "${fault.service}"`);
+        r.error(path, `overlaps faults[${otherIndex}] on service "${fault.service}"`);
       }
     });
   });

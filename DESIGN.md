@@ -179,8 +179,11 @@ The rules:
   window fits in the hold and recovery would be trivially true). `bucketMs` (250), `recovery` (90, 1000, 3000) and `faults` (none) default
   when omitted.
 - Faults: they name an existing service; `startMs` < `endMs` ≤ `durationMs`; the first fault starts at or after
-  `warmupMs + windowMs`; faults on the same service do not overlap (back-to-back is allowed);
-  `latencyMultiplier` > 0; `errorRate` in [0, 1].
+  `warmupMs + windowMs`; every fault ends at or before `durationMs − holdMs − entry.deadlineMs`, so recovery can
+  be confirmed after it (the hold contains every window it checks, and the requests it reads need up to the
+  deadline to finish); faults on the same service do not overlap (back-to-back is allowed);
+  `latencyMultiplier` > 0; `errorRate` in [0, 1]; each fault has an effect (`latencyMultiplier` ≠ 1 or
+  `errorRate` > 0).
 
 ## 6. Budget math
 
@@ -218,6 +221,8 @@ Notes:
 - If each call fits its share, all sequential calls together fit the service's budget, and every later call keeps
   at least its floor.
 - Worst-case values are for latency bounds; mean values are for capacity.
+- `window` is the first attempt's window; later retries have less time left. That is exact whenever the call fits
+  its share (every attempt then still gets its full timeout), and rule 2 fires whenever it does not.
 - Known optimism: a callee shared by several callers is assumed to give each caller its full throughput.
 
 ### Worked example: orders in the demo
@@ -254,6 +259,10 @@ for that service.
 Starved services: a service whose budget is 0 got no time from its callers, because a caller's share was at or
 below the round trip. Rules 2 and 5 skip it; the caller's own finding explains the cause. Without this, one
 upstream problem would produce an unresolvable finding on every service below it.
+
+Analyzer contracts: `effectiveBackoff` (§6) treats a missing backoff and `baseMs: 0` alike, so rule 3 must flag and
+patch both (`backoff` when absent, `backoff.baseMs` → 10 when 0). Otherwise the budgets would assume a backoff the
+mitigation never adds.
 
 Comparisons: rules compare times with a tolerance of 1e-9 ms (one shared helper), so a value that lands exactly on
 a boundary, such as a worst case equal to its share, is not flipped by floating-point noise.

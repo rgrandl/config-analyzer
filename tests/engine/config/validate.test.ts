@@ -128,7 +128,10 @@ describe('validateScenario', () => {
     ['fault beyond the run', (s) => (s.faults[0].endMs = 70000), 'faults[0].endMs', /≤ durationMs/],
     ['error rate above 1', (s) => (s.faults[0].errorRate = 1.5), 'faults[0].errorRate', /≤ 1/],
     ['fault before a baseline exists', (s) => (s.faults[0].startMs = 2500), 'faults[0].startMs', /baseline/],
-    ['overlapping faults on one service', (s) => s.faults.push({ service: 'db', startMs: 15000, endMs: 25000 }), 'faults[1]', /overlaps faults\[0\]/],
+    ['fault too late to confirm recovery', (s) => (s.faults[0].endMs = 56001), 'faults[0].endMs', /≤ .*\(56000\).*confirmed/],
+    ['fault that sets neither effect', (s) => delete s.faults[0].latencyMultiplier, 'faults[0]', /latencyMultiplier or errorRate/],
+    ['fault whose effects do nothing', (s) => (s.faults[0].latencyMultiplier = 1), 'faults[0]', /no effect/],
+    ['overlapping faults on one service', (s) => s.faults.push({ service: 'db', startMs: 15000, endMs: 25000, errorRate: 0.1 }), 'faults[1]', /overlaps faults\[0\]/],
     ['threshold above 100', (s) => (s.recovery.thresholdPct = 120), 'recovery.thresholdPct', /≤ 100/],
     ['hold shorter than the window', (s) => (s.recovery.holdMs = 500), 'recovery.holdMs', /≥ recovery.windowMs/],
     ['seed beyond 32 bits', (s) => (s.seed = 2 ** 32), 'seed', /≤ 4294967295/],
@@ -137,6 +140,14 @@ describe('validateScenario', () => {
     breakIt(raw);
     const errors = errorsOf(validateScenario(raw, demoSystem()));
     expect(errors).toContainEqual({ path, message: expect.stringMatching(message) });
+  });
+
+  it('allows a fault that ends exactly when recovery can still be confirmed', () => {
+    // Plan: end the demo fault at durationMs − holdMs − deadlineMs = 60000 − 3000 − 1000 = 56000.
+    // Verifies: the boundary itself is valid, so the check is ≤, not <.
+    const raw = rawDemoScenario();
+    raw.faults[0].endMs = 56000;
+    expect(validateScenario(raw, demoSystem()).ok).toBe(true);
   });
 
   it('allows back-to-back faults on one service', () => {
