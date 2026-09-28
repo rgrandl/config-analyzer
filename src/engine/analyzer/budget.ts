@@ -14,6 +14,32 @@ import {
 } from '../config/schema';
 import { DEFAULT_BACKOFF } from './defaults';
 
+/** Where a service's budget comes from, for explanations. */
+export type BudgetSource =
+  /** The entry: the user's deadline, minus the round trip. */
+  | { readonly kind: 'deadline'; readonly deadlineMs: Ms }
+  /**
+   * The tightest call into the service: its timeout, or the caller's share when that is smaller, minus the
+   * round trip. `limitMs` is that timeout or share.
+   */
+  | {
+      readonly kind: 'call';
+      readonly caller: string;
+      readonly call: string;
+      readonly limitedBy: 'timeout' | 'share';
+      readonly limitMs: Ms;
+    };
+
+/** What caps a service's throughput, for explanations. */
+export type ThroughputLimit =
+  /** Its own workers. */
+  | { readonly kind: 'workers' }
+  /**
+   * A service below it, whose workers cap it: `bottleneck` completes `bottleneckPerMs` requests per ms, and each
+   * request of this service makes `callsPerRequest` calls to it (through intermediate services if any).
+   */
+  | { readonly kind: 'downstream'; readonly bottleneck: string; readonly callsPerRequest: number; readonly bottleneckPerMs: number };
+
 export interface ServiceBudget {
   /** Worst-case local work: serviceTimeMs × (1 + jitter). */
   readonly svcMaxMs: Ms;
@@ -23,8 +49,10 @@ export interface ServiceBudget {
   readonly meanHealthyMs: Ms;
   /** Requests per ms this service can complete, limited by its workers and by its callees. */
   readonly throughputPerMs: number;
+  readonly throughputLimit: ThroughputLimit;
   /** Time this service really has for a request; 0 when there is none left. */
   readonly budgetMs: Ms;
+  readonly budgetSource: BudgetSource;
   /** Time left for downstream calls after worst-case local work: budget − svcMax. At most 0 means none. */
   readonly availableMs: Ms;
   /** Worst-case time a request can wait in a full queue; Infinity for unbounded queues. */
@@ -113,10 +141,11 @@ export function computeBudgets(
     const config = serviceConfig(system, name);
     const latency = required(latencies.get(name), `latency of "${name}"`);
 
-    const budgetMs = Math.max(0, serviceBudgetMs(system, graph, name, calls, rttMs));
+    const { budgetMs: rawBudgetMs, budgetSource } = serviceBudget(system, graph, name, calls, rttMs);
+    const budgetMs = Math.max(0, rawBudgetMs);
     const maxQueueWaitMs =
       config.queueCapacity === 'unbounded' ? Infinity : config.queueCapacity / latency.throughputPerMs;
-    services.set(name, { ...latency, budgetMs, availableMs: budgetMs - latency.svcMaxMs, maxQueueWaitMs });
+    services.set(name, { ...latency, budgetMs, budgetSource, availableMs: budgetMs - latency.svcMaxMs, maxQueueWaitMs });
 
     const health = graph.callsOf(name).map((edge) => callHealth(system, edge, latencies, rttMs, options));
     allocateCalls(graph.callsOf(name), health, budgetMs, latency.svcMaxMs, rttMs).forEach((budget, id) =>
@@ -127,20 +156,39 @@ export function computeBudgets(
 }
 
 /** The entry has the user's deadline; every other service has the tightest window its callers give it. */
-function serviceBudgetMs(
+function serviceBudget(
   system: SystemConfig,
   graph: CallGraph,
   name: string,
   calls: ReadonlyMap<CallId, CallBudget>,
   rttMs: Ms,
-): Ms {
-  if (name === system.entry.service) return system.entry.deadlineMs - rttMs;
+): { budgetMs: Ms; budgetSource: BudgetSource } {
+  if (name === system.entry.service) {
+    return { budgetMs: system.entry.deadlineMs - rttMs, budgetSource: { kind: 'deadline', deadlineMs: system.entry.deadlineMs } };
+  }
   const callers = graph.callersOf(name);
   if (callers.length === 0) throw new Error(`Service "${name}" has no callers; validate the config first`);
-  return Math.min(...callers.map((edge) => required(calls.get(edge.id), edge.id).windowMs));
+  // The first of the tightest calls, in graph order, names the source.
+  let tightest: { edge: CallEdge; call: CallBudget } | undefined;
+  for (const edge of callers) {
+    const call = required(calls.get(edge.id), edge.id);
+    if (!tightest || call.windowMs < tightest.call.windowMs) tightest = { edge, call };
+  }
+  const { edge, call } = required(tightest, name);
+  const limitedBy = call.shareMs < edge.config.timeoutMs ? 'share' : 'timeout';
+  return {
+    budgetMs: call.windowMs,
+    budgetSource: {
+      kind: 'call',
+      caller: edge.caller,
+      call: edge.config.name,
+      limitedBy,
+      limitMs: limitedBy === 'share' ? call.shareMs : edge.config.timeoutMs,
+    },
+  };
 }
 
-type Latency = Pick<ServiceBudget, 'svcMaxMs' | 'healthyMs' | 'meanHealthyMs' | 'throughputPerMs'>;
+type Latency = Pick<ServiceBudget, 'svcMaxMs' | 'healthyMs' | 'meanHealthyMs' | 'throughputPerMs' | 'throughputLimit'>;
 
 /** Bottom-up: a service's latency and throughput depend only on its own settings and its callees'. */
 function computeLatencies(
@@ -158,12 +206,20 @@ function computeLatencies(
     const healthyMs = svcMaxMs + sum(callees.map((callee) => rttMs + callee.healthyMs));
     const meanHealthyMs = config.serviceTimeMs + sum(callees.map((callee) => rttMs + callee.meanHealthyMs));
 
-    // A job that calls C k times can complete at most throughput(C) / k times per ms.
+    // A job that calls C k times can complete at most throughput(C) / k times per ms. On a tie, the service's
+    // own workers are named as the limit.
     let throughputPerMs = config.workers / meanHealthyMs;
+    let throughputLimit: ThroughputLimit = { kind: 'workers' };
     for (const [callee, count] of countBy(graph.callsOf(name).map((edge) => edge.callee))) {
-      throughputPerMs = Math.min(throughputPerMs, required(latencies.get(callee), callee).throughputPerMs / count);
+      const below = required(latencies.get(callee), callee);
+      if (below.throughputPerMs / count >= throughputPerMs) continue;
+      throughputPerMs = below.throughputPerMs / count;
+      throughputLimit =
+        below.throughputLimit.kind === 'workers'
+          ? { kind: 'downstream', bottleneck: callee, callsPerRequest: count, bottleneckPerMs: below.throughputPerMs }
+          : { ...below.throughputLimit, callsPerRequest: count * below.throughputLimit.callsPerRequest };
     }
-    latencies.set(name, { svcMaxMs, healthyMs, meanHealthyMs, throughputPerMs });
+    latencies.set(name, { svcMaxMs, healthyMs, meanHealthyMs, throughputPerMs, throughputLimit });
   }
   return latencies;
 }

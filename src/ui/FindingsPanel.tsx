@@ -1,7 +1,7 @@
 // Steps 2 and 3: the findings with their recommended mitigations, and what applying them changed.
 import type { Analysis } from '../engine/analyzer/analyze';
-import type { Finding } from '../engine/analyzer/finding';
-import type { MitigationResult } from '../engine/analyzer/mitigation/applyMitigations';
+import type { Finding, Target } from '../engine/analyzer/finding';
+import type { AppliedPatch, MitigationResult } from '../engine/analyzer/mitigation/applyMitigations';
 import { patchLine, targetLabel } from './format';
 
 export type MitigationState =
@@ -27,7 +27,7 @@ export function FindingsList({ analysis, selected, highlightedId, onToggle, onSe
   const calleeOf = (service: string, call: string) => graph.callsOf(service).find((e) => e.config.name === call)?.callee;
 
   if (findings.length === 0) {
-    return <p className="notice">No risky combinations found. You can still simulate the config below.</p>;
+    return <p className="notice">No findings. You can still simulate the config below.</p>;
   }
   const withMitigation = findings.filter((finding) => finding.mitigation);
   return (
@@ -154,6 +154,7 @@ export function MitigationView({ state, analysis, onReapply, onCopyIntoEditor }:
           </li>
         ))}
       </ul>
+      <NotNeeded patches={result.notNeeded} label={(target) => targetLabel(target, calleeOf)} />
       <RemainingFindings title="Still unresolved" findings={result.unresolved} />
       <RemainingFindings title="New after mitigation" findings={result.introduced} />
       <details className="mitigated-yaml">
@@ -163,6 +164,37 @@ export function MitigationView({ state, analysis, onReapply, onCopyIntoEditor }:
           Copy into the editor
         </button>
       </details>
+    </div>
+  );
+}
+
+/** Retry guards left out because their call makes a single attempt now; one line per call. */
+function NotNeeded({
+  patches,
+  label,
+}: {
+  readonly patches: readonly AppliedPatch[];
+  readonly label: (target: Target) => string;
+}) {
+  if (patches.length === 0) return null;
+  const byCall = new Map<string, { target: Target; fields: string[] }>();
+  for (const patch of patches) {
+    const key = targetLabel(patch.target);
+    const entry = byCall.get(key) ?? { target: patch.target, fields: [] };
+    entry.fields.push(patch.field);
+    byCall.set(key, entry);
+  }
+  return (
+    <div className="remaining">
+      <p>Not needed ({patches.length})</p>
+      <ul>
+        {[...byCall.entries()].map(([key, { target, fields }]) => (
+          <li key={key}>
+            {label(target)} makes a single attempt now, so {fields.join(' and ')}{' '}
+            {fields.length === 1 ? 'has' : 'have'} no effect and {fields.length === 1 ? 'is' : 'are'} left out.
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

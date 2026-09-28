@@ -229,6 +229,12 @@ Notes:
 - If each call fits its share, all sequential calls together fit the service's budget, and every later call keeps
   at least its floor.
 - Worst-case values are for latency bounds; mean values are for capacity.
+- Each service also records, for explanations, **where its budget comes from** (the user's deadline, or the
+  tightest incoming call: its timeout, or the caller's share when that is smaller; the first such call on a tie)
+  and **what limits its throughput** (its own workers, or the service below whose workers cap it, with the calls
+  to it per request multiplied along the path). Findings then say, e.g., "998 ms api has (the user's 1000 ms
+  deadline minus a 2 ms network round trip)" and "200 requests/s (limited by db, which completes 400 requests/s:
+  each request makes 2 calls to it)".
 - `window` is the first attempt's window; later retries have less time left. That is exact whenever the call fits
   its share (every attempt then still gets its full timeout), and rule 2 fires whenever it does not.
 - Known optimism: a callee shared by several callers is assumed to give each caller its full throughput.
@@ -257,7 +263,7 @@ orders budget: 898 ms
 | 1 | `retry-amplification` | A call has `maxAttempts > 1` and some call reachable below its callee also retries | high | This call's `maxAttempts` → 1; only the deepest layer retries |
 | 2 | `deadline-budget-overrun` | worstCase(call) > share(call) | high | timeout ≤ share: `maxAttempts` → largest n that fits. timeout > share and share ≥ floor: `timeoutMs` → share (exact; the UI displays it rounded) and, if it retries, `maxAttempts` → 1, in the same mitigation, since a second attempt would need at least twice the share. Otherwise: none (unresolved) |
 | 3 | `unguarded-retries` | `maxAttempts > 1` and backoff, jitter or retry budget is missing: no `backoff` or `baseMs: 0` = no backoff; `jitter: none` = no jitter; no `retryBudget` = no budget | medium | Add what is missing: backoff 10 ms × 2 up to 100 ms (if the object exists with `baseMs: 0`: `baseMs` → 10 and `maxMs` → max(maxMs, 10)), `jitter: full`, retry budget ratio 0.1 with 10 tokens |
-| 4 | `missing-deadline-propagation` | `deadlinePropagation: false` | medium | Set it to `true` |
+| 4 | `missing-deadline-propagation` | `deadlinePropagation: false` | medium | Set it to `true`. For a service without calls (the demo's db) the flag means dropping work whose caller gave up, so the finding reads "ignores its callers' deadlines" and its text mentions retries and callees only when the service has them |
 | 5 | `dead-on-arrival-queue` | maxQueueWait(S) + healthy(S) > budget(S), including unbounded queues | high | `queueCapacity` → ⌊throughput × (budget − healthy) × 0.5⌋ (throughput in requests/ms), minimum 1. None if the cap would not be smaller than today's queue |
 
 Too slow even when healthy: if `budget(S) < healthy(S)`, the service cannot finish in the time it has even with no
@@ -294,8 +300,8 @@ single retry layer, a retry budget, backoff with jitter and deadline propagation
   "rule": "deadline-budget-overrun",
   "severity": "high",
   "target": { "service": "orders", "call": "writeOrder" },
-  "title": "orders → db (writeOrder) can outlast the time orders has",
-  "explanation": "orders has 898 ms. Local work and readStock can take up to 487.5 ms first, leaving 410.5 ms. writeOrder's 3 attempts can take 480 ms, so later attempts run after api has given up.",
+  "title": "orders → db (writeOrder) can outlast the time orders has for it",
+  "explanation": "orders has 898 ms: the 900 ms timeout of api → orders (placeOrder) minus a 2 ms network round trip. Its local work and earlier calls can take up to 487.5 ms, leaving 410.5 ms for this call. 3 attempts of 150 ms can take 480 ms, so later attempts run after the caller has given up.",
   "evidence": { "budgetMs": 898, "elapsedBeforeMs": 487.5, "shareMs": 410.5, "worstCaseMs": 480, "floorMs": 34 },
   "mitigation": {
     "summary": "Reduce attempts to 2 (worst case 310 ms)",
@@ -313,7 +319,7 @@ flowchart LR
     C --> D["Merge by<br/>field registry"]
     D --> E["Apply"]
     E --> F["Re-run analyzer once"]
-    F --> G["Show: applied patches,<br/>still unresolved,<br/>new after mitigation"]
+    F --> G["Show: applied patches,<br/>not needed, still unresolved,<br/>new after mitigation"]
 ```
 
 **Field registry** (`mitigation/patchableFields.ts`) — a plain table in code. Only these fields may be patched; anything else is a bug caught by a test.
@@ -340,10 +346,15 @@ Applying mitigations (`applyMitigations`):
 
 1. Merge the selected findings' patches: one patch per field, the more conservative value wins. A patch to a field
    outside the table, or in the wrong direction, throws: a faulty rule can never produce a less safe config.
-2. Apply them to a copy of the config. Each patch first checks the field still holds the value it expects.
+2. Apply them (except those left out in step 4) to a copy of the config. Each patch first checks the field still holds the value it expects.
 3. Validate the result. Mitigations only tighten valid settings, so an invalid result means a rule is wrong, and it
    throws.
-4. Re-run the analyzer once and split its findings into **unresolved** (already present before) and **introduced**
+4. Leave out retry guards that would have no effect: patches to fields the table marks as retries-only
+   (`backoff`, its subfields, `retryBudget`) on a call that makes a single attempt after the merge. In the demo,
+   rule 3 asks for a backoff and a retry budget on `api.placeOrder`, which rules 1 and 2 make a single attempt; the
+   UI lists those two as "not needed" instead of applying them, and the rule-3 finding still counts as resolved
+   (rule 3 does not flag single-attempt calls). Deselecting the single-attempt change brings them back.
+5. Re-run the analyzer once and split its findings into **unresolved** (already present before) and **introduced**
    (new).
 
 **Not guaranteed in general:** a clean re-run. Findings without a safe mitigation stay unresolved, and a partial
@@ -580,7 +591,7 @@ findings without a click, and the primary button at the top gets to the results 
 Config Interaction Analyzer
 One paragraph: what the tool does.
 +------------------------------------------------------------------------------------------+
-| 12 risky combinations across api, orders, db.         [Apply 12 mitigations and simulate] |
+| 12 findings across api, orders, db.                   [Apply 12 mitigations and simulate] |
 +------------------------------------------------------------------------------------------+
 1. Configure                                                               [Edit the config]
    "The demo is loaded: ..."  (the editor is collapsed; it opens by itself when there are errors)
@@ -592,7 +603,7 @@ One paragraph: what the tool does.
    12 findings, 12 selected                                                     [Select none]
    [x] High  title · target · explanation · recommended change (from → to)
 3. Apply the mitigations                                                  [Apply 12 selected]
-   14 changes applied · re-check: nothing left · applied patches · still unresolved · new
+   12 changes applied · re-check: nothing left · applied patches · not needed · still unresolved · new
    Mitigated config (YAML), with "Copy into the editor"
 4. Simulate                                                              [Run the simulation]
    While running: "Running the simulation (4 runs)…" with [Cancel]
@@ -684,9 +695,9 @@ recovery: { thresholdPct: 90, windowMs: 1000, holdMs: 3000 }
 
 | Service | svcMax | healthy | meanHealthy | throughput | budget | maxQueueWait + healthy |
 |---|---|---|---|---|---|---|
-| api | 3 | 46.5 | 33 | 200/s (limited by orders) | 998 | 5046.5 |
-| orders | 7.5 | 41.5 | 29 | 200/s (limited by db, 2 calls/job) | 898 | 5041.5 |
-| db | 15 | 15 | 10 | 400/s | 148 | 2515 |
+| api | 3 | 46.5 | 33 | 200/s (limited by db, 2 calls per request) | 998 (1000 − 2 ms round trip) | 5046.5 |
+| orders | 7.5 | 41.5 | 29 | 200/s (limited by db, 2 calls per request) | 898 (placeOrder's 900 − 2) | 5041.5 |
+| db | 15 | 15 | 10 | 400/s (its 4 workers) | 148 (readStock's 150 − 2) | 2515 |
 
 | Call | share | worstCase | floor |
 |---|---|---|---|
@@ -702,7 +713,7 @@ recovery: { thresholdPct: 90, windowMs: 1000, holdMs: 3000 }
 | deadline overrun | api.placeOrder (2730 > 995) | maxAttempts 3 → 1 (merges with the above) |
 | deadline overrun | orders.writeOrder (480 > 410.5) | maxAttempts 3 → 2 |
 | unguarded retries | api.placeOrder, orders.readStock, orders.writeOrder | add backoff, jitter, retry budget |
-| missing propagation | api, orders, db | deadlinePropagation → true |
+| missing propagation | api, orders, db (db: "ignores its callers' deadlines") | deadlinePropagation → true |
 | dead-on-arrival queue | api | queueCapacity 1000 → 95 |
 | dead-on-arrival queue | orders | queueCapacity 1000 → 85 |
 | dead-on-arrival queue | db | queueCapacity 1000 → 26 |
@@ -779,7 +790,7 @@ src/
       rules/               one file per rule; rule.ts holds the Rule type and helpers; index.ts exports RULES
       mitigation/
         patchableFields.ts the field table (§8)
-        applyMitigations.ts merge, apply, validate, re-run once → MitigationResult (unresolved, introduced)
+        applyMitigations.ts merge, leave out unneeded guards, apply, validate, re-run once → MitigationResult
     simulator/
       types.ts             Runner, RunResult, BucketMetrics, ArrivalSource, client-policy types
       run.ts               the event loop: createSimulator(options), simulator (default options)
@@ -819,7 +830,8 @@ tests/                     mirrors src/; tests/engine/boundary.test.ts enforces 
   a floor that binds (no mitigation); the unresolved / introduced split (a unit test, since the current rules
   cannot introduce findings); the tolerance on a value that floating point puts just below its boundary.
 - Demo: exactly the 12 findings of §11.3; 0 unresolved after one apply.
-- Registry (`patchableFields`): the never-raise invariant; patching an unlisted field fails.
+- Registry (`patchableFields`): the never-raise invariant; patching an unlisted field fails; retry guards on a call
+  made single-attempt are left out as not needed, and kept when the call still retries.
 - Boundary: no file under `src/engine/` imports React, charting, or code outside the engine.
 - UI smoke tests (`tests/ui/`): the demo shows 12 findings on first visit; one click applies the mitigations and
   the re-check finds nothing left; an invalid config shows its error with the field path instead of crashing;

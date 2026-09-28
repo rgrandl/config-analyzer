@@ -19,9 +19,9 @@ afterEach(cleanup);
 describe('App', () => {
   it('shows the demo and its 12 findings on first visit', () => {
     // Plan: render the page with no interaction.
-    // Verifies: the demo is analyzed right away: the summary names 12 combinations and 12 findings are listed.
+    // Verifies: the demo is analyzed right away: the summary names 12 findings and 12 findings are listed.
     render(<App />);
-    expect(screen.getByText('12 risky combinations across api, orders, db.')).toBeTruthy();
+    expect(screen.getByText('12 findings across api, orders, db.')).toBeTruthy();
     expect(screen.getAllByTestId('finding')).toHaveLength(12);
   });
 

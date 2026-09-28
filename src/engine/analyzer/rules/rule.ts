@@ -5,6 +5,7 @@ import type { AnalyzerOptions, SystemConfig } from '../../config/schema';
 import type { Budgets } from '../budget';
 import { exceeds, fits } from '../compare';
 import { targetKey, type Finding, type RuleId, type Target } from '../finding';
+import { formatMs, plural } from '../text';
 
 export interface RuleContext {
   readonly system: SystemConfig;
@@ -52,4 +53,34 @@ export function isStarved(context: RuleContext, service: string): boolean {
 export function cannotFinishWhenHealthy(context: RuleContext, service: string): boolean {
   const budget = context.budgets.service(service);
   return exceeds(budget.healthyMs, budget.budgetMs);
+}
+
+/**
+ * Where a service's budget comes from, as a clause for explanations: "the user's 1000 ms deadline minus a
+ * 2 ms network round trip", or "the 900 ms timeout of api → orders (placeOrder) minus ...".
+ */
+export function budgetOrigin(context: RuleContext, service: string): string {
+  const source = context.budgets.service(service).budgetSource;
+  const origin =
+    source.kind === 'deadline'
+      ? `the user's ${formatMs(source.deadlineMs)} deadline`
+      : source.limitedBy === 'timeout'
+        ? `the ${formatMs(source.limitMs)} timeout of ${source.caller} → ${service} (${source.call})`
+        : `the ${formatMs(source.limitMs)} ${source.caller} has left for ${source.caller} → ${service} (${source.call})`;
+  const { rttMs } = context.budgets;
+  return rttMs > 0 ? `${origin} minus a ${formatMs(rttMs)} network round trip` : origin;
+}
+
+/**
+ * What caps a service's throughput, when it is a service below it, as a parenthetical for explanations:
+ * " (limited by db, which completes 400 requests/s: each request makes 2 calls to it)". Empty when the
+ * service's own workers are the limit.
+ */
+export function throughputOrigin(context: RuleContext, service: string): string {
+  const limit = context.budgets.service(service).throughputLimit;
+  if (limit.kind === 'workers') return '';
+  return (
+    ` (limited by ${limit.bottleneck}, which completes ${Math.round(limit.bottleneckPerMs * 1000)} requests/s: ` +
+    `each request makes ${plural(limit.callsPerRequest, 'call')} to it)`
+  );
 }

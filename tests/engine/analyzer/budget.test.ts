@@ -84,6 +84,26 @@ describe('computeBudgets on the demo (DESIGN.md §11.2)', () => {
     expect(actual.windowMs).toBeCloseTo(window);
   });
 
+  it('records where each budget comes from', () => {
+    // Plan: compute budgets for the demo system.
+    // Verifies: api's budget comes from the user's deadline, orders' from the placeOrder timeout, and db's from
+    //   the first of its two equally tight calls, readStock.
+    expect(budgets.service('api').budgetSource).toEqual({ kind: 'deadline', deadlineMs: 1000 });
+    expect(budgets.service('orders').budgetSource).toEqual({
+      kind: 'call', caller: 'api', call: 'placeOrder', limitedBy: 'timeout', limitMs: 900,
+    });
+    expect(budgets.service('db').budgetSource).toMatchObject({ caller: 'orders', call: 'readStock', limitedBy: 'timeout' });
+  });
+
+  it('records which service limits throughput', () => {
+    // Plan: compute budgets for the demo system.
+    // Verifies: db is limited by its own workers; orders and api by db, at 2 calls to db per request.
+    const limitedByDb = { kind: 'downstream', bottleneck: 'db', callsPerRequest: 2 };
+    expect(budgets.service('db').throughputLimit).toEqual({ kind: 'workers' });
+    expect(budgets.service('orders').throughputLimit).toMatchObject(limitedByDb);
+    expect(budgets.service('api').throughputLimit).toMatchObject(limitedByDb);
+  });
+
   it('limits a callee by the time its caller has left, not by the timeout', () => {
     // Plan: raise the demo's placeOrder timeout to 1200 ms, beyond the 995 ms api has for that call.
     // Verifies: orders gets min(1200, 995) − 2 = 993 ms, not 1198 ms.
@@ -135,6 +155,7 @@ describe('computeBudgets allocation rules', () => {
     );
     expect(budgets.service('c').throughputPerMs).toBeCloseTo(0.1);
     expect(budgets.service('s').throughputPerMs).toBeCloseTo(0.05);
+    expect(budgets.service('s').throughputLimit).toEqual({ kind: 'downstream', bottleneck: 'c', callsPerRequest: 2, bottleneckPerMs: 0.1 });
   });
 
   it('treats an unbounded queue as an infinite wait', () => {
@@ -176,6 +197,7 @@ describe('computeBudgets allocation rules', () => {
     expect(budgets.call('a.toC').windowMs).toBe(300);
     expect(budgets.call('b.toC').windowMs).toBe(100);
     expect(budgets.service('c').budgetMs).toBe(100);
+    expect(budgets.service('c').budgetSource).toMatchObject({ caller: 'b', call: 'toC' });
   });
 
   it('limits a window by the share when the timeout is longer', () => {
@@ -187,6 +209,7 @@ describe('computeBudgets allocation rules', () => {
     expect(budgets.call('s.toA').shareMs).toBe(988);
     expect(budgets.call('s.toA').windowMs).toBe(986);
     expect(budgets.service('a').budgetMs).toBe(986);
+    expect(budgets.service('a').budgetSource).toEqual({ kind: 'call', caller: 's', call: 'toA', limitedBy: 'share', limitMs: 988 });
   });
 
   it('exposes the time left for calls after local work', () => {

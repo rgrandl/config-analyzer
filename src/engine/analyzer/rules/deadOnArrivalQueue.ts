@@ -4,7 +4,7 @@ import { exceeds } from '../compare';
 import { QUEUE_HEADROOM } from '../defaults';
 import type { Finding, Mitigation } from '../finding';
 import { formatMs } from '../text';
-import { cannotFinishWhenHealthy, findingId, serviceTarget, type Rule } from './rule';
+import { budgetOrigin, cannotFinishWhenHealthy, findingId, serviceTarget, throughputOrigin, type Rule } from './rule';
 
 export const deadOnArrivalQueue: Rule = {
   id: 'dead-on-arrival-queue',
@@ -27,9 +27,10 @@ export const deadOnArrivalQueue: Rule = {
         title: `The ${service} queue can hold work nobody will wait for`,
         explanation:
           `A full queue of ${capacity === 'unbounded' ? 'unbounded length' : capacity} at ` +
-          `${Math.round(budget.throughputPerMs * 1000)} requests/s means a wait of up to ${formatMs(budget.maxQueueWaitMs)}. ` +
-          `With ${formatMs(budget.healthyMs)} of work after that, a request can need more than the ` +
-          `${formatMs(budget.budgetMs)} it has, so the service spends its capacity on requests whose caller is gone.`,
+          `${Math.round(budget.throughputPerMs * 1000)} requests/s${throughputOrigin(context, service)} means a wait of ` +
+          `up to ${formatMs(budget.maxQueueWaitMs)}. With ${formatMs(budget.healthyMs)} of work after that, a request ` +
+          `can need more than the ${formatMs(budget.budgetMs)} ${service} has (${budgetOrigin(context, service)}), ` +
+          'so the service spends its capacity on requests whose caller is gone.',
         evidence: {
           queueCapacity: capacity,
           throughputPerSec: budget.throughputPerMs * 1000,

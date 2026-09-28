@@ -1,11 +1,12 @@
 // Applies the selected findings' patches and re-checks the result (DESIGN.md §8):
 // merge patches per field (the more conservative value wins), apply them to a copy of the config,
-// then run the analyzer once more and report what is still unresolved and what is new.
+// drop retry guards on calls that no longer retry, then run the analyzer once more and report what is still
+// unresolved and what is new.
 import type { AnalyzerOptions, SystemConfig } from '../../config/schema';
 import { DEFAULT_ANALYZER_OPTIONS } from '../../config/schema';
 import { validateSystem } from '../../config/validate';
 import { analyze, type Analysis } from '../analyze';
-import { targetKey, type Finding, type Patch } from '../finding';
+import { targetKey, type Finding, type Patch, type Target } from '../finding';
 import { mergeValues, movesConservatively, patchableField } from './patchableFields';
 
 /** A merged patch, with the findings that asked for it. */
@@ -17,6 +18,11 @@ export interface MitigationResult {
   /** The mitigated config; the input config is never modified. */
   readonly config: SystemConfig;
   readonly applied: readonly AppliedPatch[];
+  /**
+   * Selected patches left out because they would have no effect: retry guards (backoff, retry budget) on a call
+   * that the mitigated config makes a single attempt. Their findings are resolved: the call no longer retries.
+   */
+  readonly notNeeded: readonly AppliedPatch[];
   /** Findings of the re-run that were already present before: not fixed, or fixed only partly. */
   readonly unresolved: readonly Finding[];
   /** Findings of the re-run that were not present before. */
@@ -32,7 +38,7 @@ export function applyMitigations(
   options: AnalyzerOptions = DEFAULT_ANALYZER_OPTIONS,
 ): MitigationResult {
   const selected = findings.filter((finding) => selectedIds.has(finding.id));
-  const applied = mergePatches(selected);
+  const { applied, notNeeded } = dropUnneededPatches(system, mergePatches(selected));
 
   const config = structuredClone(system);
   for (const patch of applied) applyPatch(config, patch);
@@ -44,7 +50,29 @@ export function applyMitigations(
   }
 
   const analysis = analyze(config, options);
-  return { config, applied, ...classifyFindings(findings, analysis.findings), analysis };
+  return { config, applied, notNeeded, ...classifyFindings(findings, analysis.findings), analysis };
+}
+
+/**
+ * Splits off the retries-only patches (the field table's `retriesOnly`) of calls that make a single attempt
+ * once the patches are applied, e.g. a backoff for a call whose maxAttempts another patch lowers to 1.
+ */
+export function dropUnneededPatches(
+  system: SystemConfig,
+  patches: readonly AppliedPatch[],
+): { applied: AppliedPatch[]; notNeeded: AppliedPatch[] } {
+  const attemptsAfter = (target: Target): number | undefined => {
+    const patched = patches.find((p) => p.field === 'maxAttempts' && targetKey(p.target) === targetKey(target));
+    if (patched) return patched.to as number;
+    return system.services[target.service]?.calls.find((call) => call.name === target.call)?.maxAttempts;
+  };
+  const applied: AppliedPatch[] = [];
+  const notNeeded: AppliedPatch[] = [];
+  for (const patch of patches) {
+    const unneeded = patchableField(patch.target, patch.field)?.retriesOnly === true && attemptsAfter(patch.target) === 1;
+    (unneeded ? notNeeded : applied).push(patch);
+  }
+  return { applied, notNeeded };
 }
 
 /** One patch per (target, field), merged by the field table; refuses fields outside it and unsafe directions. */

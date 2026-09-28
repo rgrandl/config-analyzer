@@ -17,16 +17,18 @@ export interface PatchableField {
   /** Dotted path within the service or call, e.g. "backoff.baseMs". */
   readonly field: string;
   readonly kind: FieldKind;
+  /** Only has an effect on a call that retries; not applied where the mitigated call makes a single attempt. */
+  readonly retriesOnly?: true;
 }
 
 export const PATCHABLE_FIELDS: readonly PatchableField[] = [
   { level: 'call', field: 'timeoutMs', kind: 'lower' },
   { level: 'call', field: 'maxAttempts', kind: 'lower' },
-  { level: 'call', field: 'backoff', kind: 'add-if-absent' },
-  { level: 'call', field: 'backoff.baseMs', kind: 'raise' },
-  { level: 'call', field: 'backoff.maxMs', kind: 'raise' },
-  { level: 'call', field: 'backoff.jitter', kind: 'full-jitter' },
-  { level: 'call', field: 'retryBudget', kind: 'add-if-absent' },
+  { level: 'call', field: 'backoff', kind: 'add-if-absent', retriesOnly: true },
+  { level: 'call', field: 'backoff.baseMs', kind: 'raise', retriesOnly: true },
+  { level: 'call', field: 'backoff.maxMs', kind: 'raise', retriesOnly: true },
+  { level: 'call', field: 'backoff.jitter', kind: 'full-jitter', retriesOnly: true },
+  { level: 'call', field: 'retryBudget', kind: 'add-if-absent', retriesOnly: true },
   { level: 'service', field: 'queueCapacity', kind: 'lower' },
   { level: 'service', field: 'deadlinePropagation', kind: 'enable' },
 ];

@@ -92,6 +92,30 @@ describe('applyMitigations', () => {
     expect(result.introduced).toEqual([]);
   });
 
+  it('leaves out retry guards on a call that no longer retries', () => {
+    // Plan: apply all demo findings; placeOrder goes to 1 attempt, and rule 3 also asked for its backoff and
+    //   retry budget.
+    // Verifies: those two patches are listed as not needed, not applied, the mitigated placeOrder has no
+    //   backoff, and the re-check still finds nothing left.
+    const result = applyMitigations(demo, findings, all);
+    expect(result.notNeeded.map((p) => `${p.target.call}.${p.field}`)).toEqual(['placeOrder.backoff', 'placeOrder.retryBudget']);
+    expect(result.applied.some((p) => p.target.call === 'placeOrder' && p.field !== 'maxAttempts')).toBe(false);
+    expect(result.config.services.api?.calls[0]?.backoff).toBeUndefined();
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it('keeps retry guards when the call still retries', () => {
+    // Plan: apply all demo findings except the two that make placeOrder a single attempt.
+    // Verifies: placeOrder keeps 3 attempts, so its backoff and retry budget are applied and none are left out.
+    const selection = new Set(
+      [...all].filter((id) => id !== 'retry-amplification:api.placeOrder' && id !== 'deadline-budget-overrun:api.placeOrder'),
+    );
+    const result = applyMitigations(demo, findings, selection);
+    expect(result.notNeeded).toEqual([]);
+    expect(result.config.services.api?.calls[0]?.backoff).toBeDefined();
+    expect(result.config.services.api?.calls[0]?.retryBudget).toBeDefined();
+  });
+
   it('merges the two findings that both reduce placeOrder to one attempt', () => {
     // Plan: apply all demo findings and look at the patch of api.placeOrder.maxAttempts.
     // Verifies: one patch 3 → 1, contributed by rules 1 and 2.

@@ -107,7 +107,7 @@ describe('deadline-budget-overrun', () => {
     );
     expect(findings.map((f) => f.id)).toEqual(['deadline-budget-overrun:s']);
     expect(findings[0]?.mitigation).toBeNull();
-    expect(findings[0]?.explanation).toMatch(/user's deadline/);
+    expect(findings[0]?.explanation).toMatch(/s has 1000 ms \(the user's 1000 ms deadline\)/);
   });
 
   it('reports a timeout shorter than the callee needs when healthy', () => {
@@ -118,7 +118,7 @@ describe('deadline-budget-overrun', () => {
     const onA = analyze(config).findings.filter((f) => f.target.service === 'a' && f.rule !== 'missing-deadline-propagation');
     expect(onA.map((f) => f.id)).toEqual(['deadline-budget-overrun:a']);
     expect(onA[0]?.mitigation).toBeNull();
-    expect(onA[0]?.explanation).toMatch(/calls into a leave it 12 ms/);
+    expect(onA[0]?.explanation).toMatch(/a has 12 ms \(the 12 ms timeout of s → a \(toA\)\)/);
   });
 
   it('skips a service starved by a share at or below the round trip', () => {
@@ -235,9 +235,47 @@ describe('missing-deadline-propagation', () => {
     expect(findings.map((f) => f.id)).toEqual(['missing-deadline-propagation:a']);
     expect(findings[0]?.mitigation?.patches[0]).toMatchObject({ field: 'deadlinePropagation', to: true });
   });
+
+  it('describes a leaf service by what the flag does for it: dropping stale work', () => {
+    // Plan: take the demo's db, which makes no calls.
+    // Verifies: the title and fix speak of honoring callers' deadlines, and the text mentions neither retries
+    //   nor callees, which db does not have.
+    const [db] = findingsOf(demoSystem(), 'missing-deadline-propagation').filter((f) => f.target.service === 'db');
+    expect(db?.title).toBe("db ignores its callers' deadlines");
+    expect(db?.mitigation?.summary).toBe("Honor its callers' deadlines");
+    expect(db?.explanation).not.toMatch(/retrying|callees/);
+  });
+
+  it('mentions retries and callees for a service that has them', () => {
+    // Plan: take the demo's orders, which calls db with retries.
+    // Verifies: the title says it does not propagate deadlines, and the text covers both retries and callees.
+    const [orders] = findingsOf(demoSystem(), 'missing-deadline-propagation').filter((f) => f.target.service === 'orders');
+    expect(orders?.title).toBe('orders does not propagate deadlines');
+    expect(orders?.explanation).toMatch(/serving and retrying/);
+    expect(orders?.explanation).toMatch(/its callees cannot tell/);
+  });
 });
 
 describe('dead-on-arrival-queue', () => {
+  it('explains where the budget and a downstream throughput limit come from', () => {
+    // Plan: take the demo's api queue finding.
+    // Verifies: the 200 requests/s is attributed to db (400 requests/s, 2 calls per request), and the 998 ms
+    //   to the user's 1000 ms deadline minus the 2 ms round trip.
+    const [api] = findingsOf(demoSystem(), 'dead-on-arrival-queue').filter((f) => f.target.service === 'api');
+    expect(api?.explanation).toContain(
+      '200 requests/s (limited by db, which completes 400 requests/s: each request makes 2 calls to it)',
+    );
+    expect(api?.explanation).toContain("998 ms api has (the user's 1000 ms deadline minus a 2 ms network round trip)");
+  });
+
+  it('names no downstream limit for a service limited by its own workers', () => {
+    // Plan: take the demo's db queue finding; db has no callees.
+    // Verifies: no "limited by" clause, and the budget is attributed to the tightest call into db.
+    const [db] = findingsOf(demoSystem(), 'dead-on-arrival-queue').filter((f) => f.target.service === 'db');
+    expect(db?.explanation).not.toContain('limited by');
+    expect(db?.explanation).toContain('148 ms db has (the 150 ms timeout of orders → db (readStock) minus');
+  });
+
   // A single service: 1 worker, 10 ms per request, so it completes 0.1 requests/ms.
   const single = (queueCapacity: number | 'unbounded', deadlineMs: number) =>
     system({ s: service({ workers: 1, queueCapacity }) }, { entry: { service: 's', deadlineMs } });

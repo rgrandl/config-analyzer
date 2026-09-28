@@ -12,6 +12,7 @@ import {
   findingId,
   isStarved,
   serviceTarget,
+  budgetOrigin,
   type Rule,
   type RuleContext,
 } from './rule';
@@ -49,7 +50,7 @@ function callOverrun(context: RuleContext, edge: CallEdge, call: CallBudget): Fi
     target,
     title: `${describeCall(edge)} can outlast the time ${edge.caller} has for it`,
     explanation:
-      `${edge.caller} has ${formatMs(budgetMs)}. ${before} can take up to ${formatMs(call.elapsedBeforeMs)}` +
+      `${edge.caller} has ${formatMs(budgetMs)}: ${budgetOrigin(context, edge.caller)}. ${before} can take up to ${formatMs(call.elapsedBeforeMs)}` +
       `${reserve}, leaving ${formatMs(call.shareMs)} for this call. ${plural(maxAttempts, 'attempt')} of ` +
       `${formatMs(timeoutMs)} can take ${formatMs(call.worstCaseMs)}, so later attempts run after the caller has given up.`,
     evidence: {
@@ -100,10 +101,6 @@ function overrunMitigation(edge: CallEdge, call: CallBudget): Mitigation | null 
 function tooSlowForBudget(context: RuleContext, service: string): Finding {
   const target = serviceTarget(service);
   const { budgetMs, healthyMs, svcMaxMs } = context.budgets.service(service);
-  const given =
-    service === context.system.entry.service
-      ? `The user's deadline leaves ${service} ${formatMs(budgetMs)}`
-      : `The calls into ${service} leave it ${formatMs(budgetMs)}`;
   return {
     id: findingId('deadline-budget-overrun', target),
     rule: 'deadline-budget-overrun',
@@ -111,7 +108,7 @@ function tooSlowForBudget(context: RuleContext, service: string): Finding {
     target,
     title: `${service} cannot finish in the time it has, even when healthy`,
     explanation:
-      `${given}, but it needs up to ${formatMs(healthyMs)} with no load (${formatMs(svcMaxMs)} of its own work, ` +
+      `${service} has ${formatMs(budgetMs)} (${budgetOrigin(context, service)}), but it needs up to ${formatMs(healthyMs)} with no load (${formatMs(svcMaxMs)} of its own work, ` +
       'the rest in its calls). Every request can time out even on a quiet system. This needs faster services, ' +
       'or a decision to give it more time; the analyzer never raises timeouts or deadlines itself.',
     evidence: { budgetMs, healthyMs, svcMaxMs },

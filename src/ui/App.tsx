@@ -156,8 +156,8 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
             {!system.ok
               ? 'Fix the system config to see its findings.'
               : findings.length === 0
-                ? 'No risky combinations in this config.'
-                : `${findings.length} risky ${findings.length === 1 ? 'combination' : 'combinations'} across ${Object.keys(system.value.services).join(', ')}.`}
+                ? 'No findings in this config.'
+                : `${findings.length} ${findings.length === 1 ? 'finding' : 'findings'} across ${Object.keys(system.value.services).join(', ')}.`}
           </p>
           {scenario?.ok === false ? (
             <button type="button" className="button-primary" disabled={!analysis?.ok || selected.size === 0} onClick={apply}>
