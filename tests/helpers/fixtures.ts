@@ -59,3 +59,23 @@ export function system(
     ...overrides,
   };
 }
+
+/** A 10 s scenario with no faults; tests usually pass their own arrival times to the runner. */
+export function scenario(overrides: Partial<Scenario> = {}): Scenario {
+  return {
+    version: 1,
+    rps: 10,
+    durationMs: 10_000,
+    warmupMs: 0,
+    bucketMs: 250,
+    seed: 1,
+    faults: [],
+    recovery: { thresholdPct: 90, windowMs: 1000, holdMs: 3000 },
+    ...overrides,
+  };
+}
+
+/** Sums one numeric field over all buckets, for one service or one call. */
+export function total<T>(items: readonly T[], pick: (item: T) => number): number {
+  return items.reduce((sum, item) => sum + pick(item), 0);
+}

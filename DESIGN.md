@@ -376,7 +376,9 @@ stateDiagram-v2
 - Every failure (rejection, error, timeout, expired, downstream failure) is retryable; operations are idempotent.
 
 **Contracts shared with the budget math.** The analyzer's numbers (§6) assume the simulator behaves exactly like
-this; if either side changes, both must:
+this; if either side changes, both must. The formulas live in `config/semantics.ts` (`backoffDelayMs`,
+`localWorkMs`, `localWorkMaxMs`, `carriedDeadlineMs`), which both sides call, so they cannot drift; a test also runs
+the demo at low load and checks every latency against the analyzer's `healthy`:
 
 - A job does its local work first, then its calls, in order.
 - An attempt's timeout covers the full round trip: the timer starts when the request is sent.
@@ -429,11 +431,14 @@ function afterFailure(call: CallConfig, state: AttemptState): { retry: false } |
 - Each attempt carries the deadline `send time + attempt timeout − networkLatencyMs` (room for the return hop).
   A callee that propagates deadlines adopts it; one that does not ignores it.
 - Response vs. timer: the first event wins. On a tie, the **timeout wins** (success requires strictly earlier).
-- Retry after a failure only if attempts remain, the deadline (if known) has not passed, and a retry-budget token is
-  available when a budget is configured. The retry waits for the backoff delay.
+- Retry after a failure only if attempts remain, a retry-budget token is available when a budget is configured, and
+  the backoff delay ends before the deadline (if known). A retry that could only start at or after the deadline is
+  never scheduled, so no worker is held waiting for it; the call fails right away instead. The retry waits for the
+  backoff delay.
 - Backoff before retry k: d = min(baseMs × multiplier^(k−1), maxMs); `jitter: full` → uniform(0, d); `none` → d.
 - Retry budget: one token bucket per call, shared by all jobs of that service. Starts full at `maxTokens`. Each first
-  attempt adds `ratio` tokens (capped); each retry spends 1. Retries never earn tokens.
+  attempt adds `ratio` tokens (capped); each retry spends 1. Retries never earn tokens. A retry needs 1 token up to
+  a 1e-9 tolerance, because floating point adds ten steps of 0.1 up to slightly less than 1.
 - End users send one attempt and never retry.
 
 ### 9.3 Randomness: identical across runs by construction
@@ -462,10 +467,30 @@ interface Runner {
 interface RunResult {
   buckets: BucketMetrics[];
   requests: { arrivalMs: number; completionMs: number | null; ok: boolean }[];
+  eventCount: number;
+  truncated: boolean;   // the run hit the event cap
+  endedAtMs: number;    // durationMs, or earlier when truncated
 }
 ```
 
-Events are ordered by (time, sequence number). A global event cap stops runaway runs with a clear error.
+Events are ordered by (time, sequence number), so ties come out in the order they were scheduled. Arrivals are fed
+into the event queue one at a time. A run stops after 5 million events (configurable through
+`createSimulator({ maxEvents })`) and returns a partial result marked `truncated`, which the UI shows, instead of
+throwing. `eventCount` includes timeout events that fire after their attempt was already answered and do nothing;
+they are cheaper to skip than to remove from the heap.
+
+Runs are exactly reproducible on the same JavaScript engine. Arrivals use `Math.log`, which is not guaranteed
+bit-identical across engines, so another browser may produce slightly different numbers for the same seed; the
+comparison between configs is unaffected, since all its runs happen in the same engine.
+
+Implementation notes:
+
+- The end user is modelled as a caller with one attempt whose timeout is the deadline, so responses, timeouts and
+  wasted work need no special cases for it.
+- A job's key for random draws is a 32-bit path hash built incrementally from its caller's: `mix(parent, call, attempt)`.
+- A response at exactly the timeout is a timeout. The timeout event, scheduled when the attempt is sent, is always
+  processed first at equal times; the response handler also checks the time explicitly, so the rule does not depend
+  on event order.
 
 ### 9.4 Why the original stays broken
 
@@ -497,12 +522,13 @@ timeouts: a mitigation that set a timeout too tight shows timeouts under normal 
 | Scope | Metrics |
 |---|---|
 | Global | user arrivals, goodput (successes within the user deadline, by completion time), late successes, failures |
-| Per service | arrivals (first attempt vs retry), rejections, expired drops, max queue depth, utilization, wasted-work fraction |
+| Per service | arrivals (first attempt vs retry), rejections, expired drops, completions, max queue depth, utilization, wasted-work fraction |
 | Per call | attempts, retries, timeouts, failures |
 | Latency | p50 / p99 over 1 s windows (250 ms buckets are too small for percentiles) |
 
 - **Wasted work** = worker time spent on a job whose caller had already given up. When a job ends, its worker time
-  is added to every bucket it spanned, so fractions never exceed 1. Only direct abandonment counts (a lower bound).
+  is added to every bucket it spanned, so fractions never exceed 1. Only direct abandonment counts, so it is a lower
+  bound: a db job whose orders caller is still waiting counts as useful, even if api has already given up on orders.
 - **Utilization** is accounted the same way.
 
 ### 10.2 Recovery
@@ -659,6 +685,7 @@ src/
       validate.ts          plain value → typed config, in three phases (§5.4)
       load.ts              loadSystem, loadScenario: parse + validate, for the UI
       callGraph.ts         the call graph, shared by validation, the analyzer and the simulator
+      semantics.ts         formulas the analyzer and the simulator share (§9.1 contracts)
     analyzer/
       analyze.ts           entry point: analyze(config) → Analysis (findings, budgets, graph)
       budget.ts            latencies, throughput, floors, budgets, shares (§6) → Budgets
@@ -672,7 +699,7 @@ src/
         applyMitigations.ts merge, apply, validate, re-run once → MitigationResult (unresolved, introduced)
     simulator/
       types.ts             Runner, RunResult, BucketMetrics, ArrivalSource, client-policy types
-      run.ts               the event loop: workers, queues, deadlines, faults
+      run.ts               the event loop: createSimulator(options), simulator (default options)
       metrics.ts           bucket accounting: time slicing, utilization, wasted work
       arrivals.ts          poissonArrivals
       keyedRandom.ts       identity-keyed random draws (§9.3)

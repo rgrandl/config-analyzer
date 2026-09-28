@@ -2,6 +2,7 @@
 // Latencies and throughput are computed bottom-up (callees first); budgets and shares top-down (callers first).
 // All values are in milliseconds, and throughput is in requests per millisecond.
 import { CallGraph, type CallEdge, type CallId } from '../config/callGraph';
+import { backoffDelayMs, localWorkMaxMs } from '../config/semantics';
 import {
   DEFAULT_ANALYZER_OPTIONS,
   type AnalyzerOptions,
@@ -83,11 +84,6 @@ export function effectiveBackoff(call: CallConfig): BackoffConfig | undefined {
   return call.backoff;
 }
 
-/** Upper bound of the delay before retry `retry` (1-based): min(baseMs × multiplier^(retry−1), maxMs). */
-export function backoffDelayMs(backoff: BackoffConfig, retry: number): Ms {
-  return Math.min(backoff.baseMs * backoff.multiplier ** (retry - 1), backoff.maxMs);
-}
-
 /** Worst case of `attempts` attempts of `timeoutMs` each, plus the effective backoff before each retry. */
 export function worstCaseMs(call: CallConfig, attempts: number, timeoutMs: Ms): Ms {
   const backoff = effectiveBackoff(call);
@@ -158,7 +154,7 @@ function computeLatencies(
     const config = serviceConfig(system, name);
     const callees = graph.callsOf(name).map((edge) => required(latencies.get(edge.callee), edge.callee));
 
-    const svcMaxMs = config.serviceTimeMs * (1 + config.serviceTimeJitter);
+    const svcMaxMs = localWorkMaxMs(config);
     const healthyMs = svcMaxMs + sum(callees.map((callee) => rttMs + callee.healthyMs));
     const meanHealthyMs = config.serviceTimeMs + sum(callees.map((callee) => rttMs + callee.meanHealthyMs));
 

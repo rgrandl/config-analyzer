@@ -45,6 +45,12 @@ export interface RunResult {
   buckets: BucketMetrics[];
   /** Every end-user request, in arrival order. Recovery is computed from these. */
   requests: RequestOutcome[];
+  /** Events processed. */
+  eventCount: number;
+  /** The run hit the event cap and stopped early; everything after `endedAtMs` is missing. */
+  truncated: boolean;
+  /** Simulated time the run reached: durationMs, or earlier when truncated. */
+  endedAtMs: Ms;
 }
 
 export interface RequestOutcome {
@@ -73,8 +79,10 @@ export interface ServiceBucketMetrics {
   retryArrivals: number;
   rejections: number;
   expiredDrops: number;
+  /** Jobs that finished their work, successfully or not (rejected and dropped jobs never start). */
+  completions: number;
   maxQueueDepth: number;
-  /** Busy worker time ÷ (workers × bucketMs), 0..1. */
+  /** Busy worker time ÷ (workers × the bucket's length; the last bucket may be shorter), 0..1. */
   utilization: number;
   /** Worker time spent on jobs whose caller had given up ÷ busy worker time, 0..1. */
   wastedFraction: number;
