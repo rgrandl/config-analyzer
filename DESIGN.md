@@ -51,8 +51,8 @@ flowchart LR
     P -->|original config| R["Runner<br/>(simulator)"]
     MC -->|mitigated config| R
     AS["Arrival source"] -->|same arrivals| R
-    R --> RR["RunResult × 4"]
-    RR --> UI["Charts + summary"]
+    R --> RR["RunResult × 4<br/>(in a Web Worker)"]
+    RR --> UI["Verdict, summary, charts"]
 ```
 
 - **Engine** (`src/engine/`): pure TypeScript, no DOM, no React. Config (schema, parsing, validation, call graph),
@@ -60,6 +60,9 @@ flowchart LR
   a test: no file under `src/engine/` may import React, charting, or anything outside `src/engine/`, and the
   analyzer and the simulator never import each other (what they share lives in `config/`).
 - **UI** (`src/ui/`): React. Reads engine outputs only; holds no domain logic. The only place React is imported.
+  The four simulation runs take about a second for the demo, so they run in a Web Worker (`simulationWorker.ts`)
+  and the page stays responsive; the App receives the runner as a function (`RunSimulation`), so the smoke tests
+  run it in-process instead.
 - The analyzer reads **only the system config**. The simulator reads the system config and the scenario.
 
 ## 4. User journey
@@ -88,8 +91,10 @@ flowchart TD
    services, and the 12 findings are listed below it.
 2. The top finding reads: *"api → orders retries 3× and orders → db also retries 3×: up to 18 db attempts per user
    request. Recommended: set api → orders maxAttempts 3 → 1."*
-3. The user applies all mitigations. The panel lists 12 applied findings and **0 unresolved**.
-4. The user runs the simulation. The goodput chart shows both lines at about 140 requests/s before the fault and
+3. The user clicks **Apply 12 mitigations and simulate** at the top. Step 3 lists the applied changes and
+   **0 unresolved**; step 4 shows a loading state (with Cancel) and then the results.
+4. The verdict reads: *"After db was slowed 5× from 10 to 20 s, the original config never recovered; the mitigated
+   config recovered as soon as it ended."* The goodput chart shows both lines at about 140 requests/s before the fault and
    near zero during it. When the fault ends at t = 20 s, the mitigated line jumps straight back to about 140/s, while
    the original stays at 0 through t = 60 s (measured, seed 42; see §11.4).
 5. The user unchecks the deadline-propagation mitigations, re-applies and re-runs, and sees how recovery changes —
@@ -575,7 +580,7 @@ findings without a click, and the primary button at the top gets to the results 
 Config Interaction Analyzer
 One paragraph: what the tool does.
 +------------------------------------------------------------------------------------------+
-| 12 risky combinations across api, orders, db.            [Apply mitigations and simulate] |
+| 12 risky combinations across api, orders, db.         [Apply 12 mitigations and simulate] |
 +------------------------------------------------------------------------------------------+
 1. Configure                                                               [Edit the config]
    "The demo is loaded: ..."  (the editor is collapsed; it opens by itself when there are errors)
@@ -589,18 +594,39 @@ One paragraph: what the tool does.
 3. Apply the mitigations                                                  [Apply 12 selected]
    14 changes applied · re-check: nothing left · applied patches · still unresolved · new
    Mitigated config (YAML), with "Copy into the editor"
-4. Simulate                   (4b: loading state, summary cards, charts, explanations)
+4. Simulate                                                              [Run the simulation]
+   While running: "Running the simulation (4 runs)…" with [Cancel]
+   Verdict: "After db was slowed 5× from 10 to 20 s, the original config never recovered; the mitigated ..."
+   Summary table: Original | Mitigated — success before / during / after, goodput after, recovery,
+                  timeouts without the fault, most wasted work
+   Note when the mitigated line is also near zero during the fault (why that is expected)
+   Legend: original solid red · mitigated dashed teal · fault amber band
+   Headline chart: [Goodput | Success ratio]   (ratio view: recovery threshold + "Mitigated recovers" marker)
+   Service picker (defaults to the faulted service) → queue depth · retries arriving/s · work wasted %
 ```
 
+- The primary button applies the current selection and then simulates, so the charts are one click away. With
+  nothing selected it reads "Simulate the config" (the mitigated config equals the original); while the scenario
+  is invalid it only applies, and step 4 says what to fix.
+- Each simulation runs in a fresh worker, terminated when it answers or on Cancel; a cancelled run returns step 4
+  to its idle state. A worker error is shown as a message in step 4.
+- A truncated run (event cap, §9.1) shows a notice that its results end early and its recovery is unknown.
+- The note on the near-zero mitigated line during the fault appears when the mitigated success ratio during the
+  fault is below 10% and the mitigated run recovered (the demo's case, §11.4).
+- The success-ratio view plots the same arrival windows recovery uses (§10.2), one point per bucket, so the
+  threshold line and the recovery marker line up with the recovery time in the table.
 - The call graph runs left to right on wide screens and top to bottom below 700 px, where a left-to-right graph would
   shrink its text below reading size. Selecting a finding highlights its service or call.
 - Results that no longer match the config or the selection are kept but marked out of date, with a button to redo
-  the step.
+  the step. A simulation depends on the scenario as well.
 - Every panel sits inside an error boundary: if one ever fails to render, it shows the error and the rest of the page
   keeps working. A failure to apply mitigations is shown as a message, and the original config stays usable.
 - Visual language: IBM Plex Sans for the interface and IBM Plex Mono only for code (YAML, patch values), bundled
   with the app rather than loaded from a font service. Red is the original config, teal the mitigated one, amber the
-  fault; lines also differ in style (solid vs. dashed), so color never carries meaning alone.
+  fault; lines also differ in style (solid vs. dashed), so color never carries meaning alone. The two series colors
+  (#B42318, #00846B) pass the dataviz palette validator on the white chart surface (lightness, chroma, color-vision
+  separation, contrast); text that refers to the mitigated config uses a darker ink (#1E6F5C), never the series
+  color.
 
 Badges count findings per service. A call's findings count on the **calling** service (the one that owns the
 setting); the edge is highlighted when one of them is selected. Demo: api 5, orders 5, db 2 = 12.
@@ -770,7 +796,10 @@ src/
     ConfigEditor.tsx       System and Scenario tabs, validation errors
     CallGraphView.tsx      services, calls, finding badges, highlighting; horizontal or vertical layout
     FindingsPanel.tsx      FindingsList (findings and patches) and MitigationView (applied, unresolved, new, YAML)
-    ResultsPanel.tsx       summary cards, charts and explanations (4b)
+    ResultsPanel.tsx       verdict, summary table, notes (truncation, near-zero during the fault), charts
+    chartData.ts           run results → chart rows: goodput, success ratio by arrival window, per-service metrics
+    simulation.ts          RunSimulation: runInWorker (the app) and runInProcess (tests)
+    simulationWorker.ts    the worker: compareRuns on the posted configs and scenario
     ErrorBoundary.tsx      keeps one panel's failure from breaking the page
     format.ts              engine values in plain words, e.g. "backoff: none → 10 ms × 2, up to 100 ms, full jitter"
     styles.css             tokens first; one stylesheet
@@ -793,8 +822,9 @@ tests/                     mirrors src/; tests/engine/boundary.test.ts enforces 
 - Registry (`patchableFields`): the never-raise invariant; patching an unlisted field fails.
 - Boundary: no file under `src/engine/` imports React, charting, or code outside the engine.
 - UI smoke tests (`tests/ui/`): the demo shows 12 findings on first visit; one click applies the mitigations and
-  the re-check finds nothing left; an invalid config shows its error with the field path instead of crashing; (4b)
-  running the simulation shows the recovery cards.
+  the re-check finds nothing left; an invalid config shows its error with the field path instead of crashing;
+  one click applies and simulates (in-process runner), shows the loading state, then the verdict, the recovery row
+  (did not recover / after 0 s) and the note on the near-zero mitigated line during the fault.
 - Simulator: identical arrivals across runs; same config + seed gives identical metrics; matching per-request draws
   across configs; request conservation per service; wasted fraction never exceeds 1; success ratio stays high in a
   no-fault run; the acceptance criteria of §11.4.
@@ -858,7 +888,7 @@ Each entry names the seam it plugs into. Content to be written when the work is 
 - Seam: Finding objects.
 - Status: not started. Open questions: TBD.
 
-### 13.10 Simulation in a Web Worker
-- Idea: keep the UI responsive for large scenarios.
-- Seam: Runner.
+### 13.10 Progress for long simulations
+- Idea: report progress from the worker (events processed, simulated time) for long scenarios.
+- Seam: the worker message protocol (`simulation.ts`); the runs already happen in a Web Worker with Cancel.
 - Status: not started. Open questions: TBD.

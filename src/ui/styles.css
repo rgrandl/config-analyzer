@@ -8,7 +8,10 @@
   --surface: #ffffff;
   --rule: #d5dbe3;
   --original: #b42318;
-  --mitigated: #1e6f5c;
+  /* Series colors, validated for color-vision separation against the white chart surface (dataviz validator). */
+  --mitigated: #00846b;
+  /* Text and borders that refer to the mitigated config use a darker ink, never the series color. */
+  --mitigated-ink: #1e6f5c;
   --fault: #f6e7c1;
   --high: #b42318;
   --medium: #9a6700;
@@ -365,7 +368,7 @@ textarea.code {
   margin-top: 4px;
   width: 16px;
   height: 16px;
-  accent-color: var(--mitigated);
+  accent-color: var(--mitigated-ink);
 }
 
 .finding-title {
@@ -420,7 +423,7 @@ textarea.code {
 
 .finding-fix p {
   margin: 0 0 2px;
-  color: var(--mitigated);
+  color: var(--mitigated-ink);
   font-weight: 500;
 }
 
@@ -440,7 +443,7 @@ textarea.code {
 .mitigation {
   padding: 14px 16px;
   border: 1px solid var(--rule);
-  border-left: 4px solid var(--mitigated);
+  border-left: 4px solid var(--mitigated-ink);
   border-radius: var(--radius);
   background: var(--surface);
 }
@@ -497,6 +500,283 @@ textarea.code {
   background: var(--paper);
 }
 
+/* Simulation ------------------------------------------------------------------ */
+
+.running {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-weight: 500;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--rule);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.results {
+  display: grid;
+  gap: 16px;
+}
+
+.verdict {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--mitigated-ink);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.results .notice {
+  margin: 0;
+}
+
+/* A short colored bar before a name ties it to its line in the charts; the text stays in ink. */
+.swatch {
+  white-space: nowrap;
+}
+
+.swatch::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  margin-right: 6px;
+  vertical-align: 0.3em;
+  border-radius: 2px;
+}
+
+.swatch-original::before {
+  background: var(--original);
+}
+
+.swatch-mitigated::before {
+  background: repeating-linear-gradient(90deg, var(--mitigated) 0 5px, transparent 5px 8px);
+}
+
+.summary {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.summary caption {
+  caption-side: bottom;
+  padding-top: 6px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  text-align: left;
+}
+
+.summary th,
+.summary td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.summary thead th {
+  font-weight: 600;
+}
+
+.summary tbody th {
+  width: 36%;
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+.summary td {
+  font-variant-numeric: tabular-nums;
+}
+
+.summary tbody tr:last-child > * {
+  border-bottom: none;
+}
+
+.notice-explain {
+  border-left: 4px solid var(--ink-soft);
+}
+
+.charts {
+  display: grid;
+  gap: 16px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-original {
+  stroke: var(--original);
+  stroke-width: 2;
+}
+
+.legend-mitigated {
+  stroke: var(--mitigated);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.legend-fault {
+  display: inline-block;
+  width: 20px;
+  height: 12px;
+  background: var(--fault);
+  border: 1px solid #e3cf98;
+}
+
+.chart {
+  margin: 0;
+  padding: 12px 12px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.chart figcaption {
+  font-weight: 600;
+}
+
+.chart .hint {
+  margin: 2px 0 8px;
+  font-size: 13px;
+}
+
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chart-headline figcaption {
+  font-size: 16px;
+}
+
+.toggle {
+  display: inline-flex;
+}
+
+.toggle button {
+  padding: 5px 12px;
+  border-color: var(--rule);
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.toggle button:first-child {
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.toggle button:last-child {
+  border-left: none;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.toggle button[aria-pressed='true'] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--surface);
+}
+
+.service-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.service-picker select {
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.chart-grid-lines line {
+  stroke: #e8ecf0;
+}
+
+.chart-axis text {
+  fill: var(--ink-soft);
+  font-size: 12px;
+}
+
+.chart-axis line {
+  stroke: var(--rule);
+}
+
+.chart-threshold line {
+  stroke: var(--ink-soft);
+}
+
+.chart-recovered line {
+  stroke: var(--mitigated-ink);
+  stroke-dasharray: 2 3;
+}
+
+.chart-threshold text,
+.chart-recovered text {
+  fill: var(--ink-soft);
+  font-size: 12px;
+}
+
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  border-color: var(--rule) !important;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .summary tbody th {
+    width: auto;
+  }
+}
+
 @media (max-width: 600px) {
   .patch-list li {
     grid-template-columns: 1fr;
@@ -507,5 +787,9 @@ textarea.code {
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
+  }
+
+  .spinner {
+    animation: none;
   }
 }
