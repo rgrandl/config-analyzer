@@ -241,7 +241,7 @@ button:disabled {
 textarea.code {
   display: block;
   width: 100%;
-  height: 340px;
+  height: 480px;
   padding: 12px;
   border: 1px solid var(--rule);
   border-radius: var(--radius);

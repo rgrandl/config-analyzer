@@ -101,4 +101,26 @@ describe('App', () => {
     );
     expect(input?.original.services.db?.queueCapacity).toBe(1000);
   });
+
+  it('resets to the demo, clearing results', async () => {
+    // Plan: simulate the demo, open the editor, break the system config, then click "Reset to demo".
+    // Verifies: the button is disabled while the demo is unchanged; after the reset the 12 findings are back
+    //   and steps 3 and 4 show their previews instead of the old, out-of-date results.
+    render(<App runSimulation={runInProcess} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Quick demo: apply all 12 fixes and simulate' }));
+    await screen.findByTestId('results', {}, { timeout: 30_000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit the config' }));
+    const reset = screen.getByRole('button', { name: 'Reset to demo' }) as HTMLButtonElement;
+    expect(reset.disabled).toBe(true);
+
+    const editor = screen.getByLabelText('System config (YAML)') as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: editor.value.replace('workers: 4', 'workers: 0') } });
+    expect(screen.queryAllByTestId('finding')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to demo' }));
+
+    expect(screen.getAllByTestId('finding')).toHaveLength(12);
+    expect(screen.queryByTestId('results')).toBeNull();
+    expect(screen.queryByTestId('mitigation-result')).toBeNull();
+    expect(screen.getByText(/Results appear here/)).toBeTruthy();
+  }, 60_000);
 });

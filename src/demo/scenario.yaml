@@ -1,4 +1,16 @@
-# The demo traffic and fault: db slows down 5× from 10 to 20 s.
+# Scenario: the traffic and the fault to simulate, identical for the original and the mitigated config.
+# Only the simulator reads it.
+#
+#   rps          user requests per second (random arrivals, the same for both configs)
+#   durationMs   length of each run; the first warmupMs are left out of the "before the fault" numbers
+#   bucketMs     time resolution of the charts
+#   seed         makes every run repeatable: same seed, same arrivals and random draws
+#   faults       what goes wrong, and when: a service slows down (latencyMultiplier) or fails a share of
+#                requests (errorRate) from startMs to endMs
+#   recovery     when a run counts as recovered: every windowMs window, for holdMs, succeeds at least
+#                thresholdPct as often as before the fault
+#
+# The demo: steady traffic, then db runs 5× slower from 10 to 20 s.
 version: 1
 rps: 140 # 280 db requests/s against 400/s capacity: 70% utilized
 durationMs: 60000

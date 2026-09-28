@@ -1,6 +1,6 @@
 # Config Interaction Analyzer — Design
 
-Status: design agreed, implementation not started · Last updated: 2026-09-27
+Status: implemented and deployed at https://rgrandl.github.io/config-analyzer/ · Last updated: 2026-09-27
 
 A browser tool that finds resilience settings which are reasonable per service but risky in combination,
 recommends one conservative mitigation per finding, and uses a deterministic discrete-event simulation to show
@@ -22,7 +22,8 @@ The tool makes that composition visible before deployment:
 3. **Simulate** the original and mitigated configs under the same traffic and fault, and show the difference.
 
 The central demo: a database slows down for 10 seconds. With the original config the system stays broken long
-after the database recovers. With the mitigated config it dips during the slowdown and recovers within seconds.
+after the database recovers. With the mitigated config it also serves almost nothing during the slowdown, but
+recovers as soon as it ends (§11.4).
 
 ## 2. Scope
 
@@ -158,7 +159,7 @@ interface Scenario {
 
 ### 5.3 Analyzer options
 
-`{ timeoutFloorMultiplier: 2 }`, editable in the UI.
+`{ timeoutFloorMultiplier: 2 }`. The engine takes it as an option; the UI uses the default and does not expose it.
 
 ### 5.4 Validation
 
@@ -560,12 +561,13 @@ timeouts: a mitigation that set a timeout too tight shows timeouts under normal 
 | Global | user arrivals, goodput (successes within the user deadline, by completion time), late successes, failures |
 | Per service | arrivals (first attempt vs retry), rejections, expired drops, completions, max queue depth, utilization, wasted-work fraction |
 | Per call | attempts, retries, timeouts, failures |
-| Latency | p50 / p99 over 1 s windows (250 ms buckets are too small for percentiles) |
 
 - **Wasted work** = worker time spent on a job whose caller had already given up. When a job ends, its worker time
   is added to every bucket it spanned, so fractions never exceed 1. Only direct abandonment counts, so it is a lower
   bound: a db job whose orders caller is still waiting counts as useful, even if api has already given up on orders.
 - **Utilization** is accounted the same way.
+- Latency percentiles are not computed: recovery and the charts use success within the deadline (§10.2), which
+  is what the user sees.
 
 ### 10.2 Recovery
 
@@ -615,7 +617,9 @@ resilience settings: timeouts, retries, backoff, deadlines and queues."
 +------------------------------------------------------------------------------------------+
 1. Configure                                                               [Edit the config]
    "The demo is loaded: ..."  (the editor is collapsed; it opens by itself when there are errors)
-   System | Scenario tabs · YAML text · errors listed with their field path · Load demo
+   System | Scenario tabs, each with a one-line description ("Your services and their resilience settings.
+   Findings come from this." / "The traffic and the fault to simulate, identical for both configs.") · YAML text
+   whose header comments explain every field · errors listed with their field path · [Reset to demo]
 2. Review the findings
    +----------------------------------------------------------------------------------+
    |  [api ●5] ── placeOrder: 900 ms × 3 ──► [orders ●5] ── readStock, writeOrder ──► [db ●2] |
@@ -662,6 +666,8 @@ resilience settings: timeouts, retries, backoff, deadlines and queues."
   shrink its text below reading size. Selecting a finding highlights its service or call.
 - Results that no longer match the config or the selection are kept but marked out of date, with a button to redo
   the step. A simulation depends on the scenario as well.
+- "Reset to demo" (in the editor) restores the demo YAML, selects every fix and clears the step 3 and 4 results,
+  cancelling a running simulation. It is disabled while the demo is unchanged.
 - Every panel sits inside an error boundary: if one ever fails to render, it shows the error and the rest of the page
   keeps working. A failure to apply mitigations is shown as a message, and the original config stays usable.
 - Visual language: IBM Plex Sans for the interface and IBM Plex Mono only for code (YAML, patch values), bundled
@@ -677,6 +683,8 @@ setting); the edge is highlighted when one of them is selected. Demo: api 5, ord
 ## 11. Demo
 
 ### 11.1 Configs
+
+Both files start with a comment block that explains every field (shown in the editor); it is omitted here.
 
 ```yaml
 # system.yaml
@@ -817,7 +825,7 @@ src/
       budget.ts            latencies, throughput, floors, budgets, shares (§6) → Budgets
       defaults.ts          recommended values: default backoff, retry budget, queue headroom
       compare.ts           exceeds / fits with a 1e-9 ms tolerance
-      text.ts              formatMs, plural, listPhrase for finding text
+      text.ts              formatMs, formatDuration, plural, listPhrase for finding text
       finding.ts           Finding, Patch, Mitigation, Target types
       rules/               one file per rule; rule.ts holds the Rule type and helpers; index.ts exports RULES
       mitigation/
@@ -836,9 +844,10 @@ src/
       compare.ts           compareRuns: arrivals generated once, four runs, each with its summary
   ui/
     App.tsx                the page and its only state: config text, selection, mitigation and simulation results
-    ConfigEditor.tsx       System and Scenario tabs, validation errors
+    ConfigEditor.tsx       System and Scenario tabs, validation errors, Reset to demo
     CallGraphView.tsx      services, calls, finding badges, highlighting; horizontal or vertical layout
-    FindingsPanel.tsx      FindingsList (findings and patches) and MitigationView (applied, unresolved, new, YAML)
+    FindingsPanel.tsx      FindingsList (sorted, collapsed findings, glossary) and MitigationView (applied, not
+                           needed, unresolved, new, YAML)
     ResultsPanel.tsx       outcome cards, summary table, notes (truncation, near-zero during the fault), charts
     chartData.ts           run results → chart rows: goodput, success ratio by arrival window, per-service metrics
     simulation.ts          RunSimulation: runInWorker (the app) and runInProcess (tests)
@@ -847,8 +856,9 @@ src/
     format.ts              engine values in plain words, e.g. "backoff: none → 10 ms × 2, up to 100 ms, full jitter"
     styles.css             tokens first; one stylesheet
   demo/                    system.yaml, scenario.yaml, index.ts (raw-text import; outside the engine)
-  main.tsx
-tests/                     mirrors src/; tests/engine/boundary.test.ts enforces the engine boundary
+  main.tsx                 mounts App; imports the bundled fonts and styles.css
+tests/                     mirrors src/; helpers/fixtures.ts builds small configs and loads the demo;
+                           tests/engine/boundary.test.ts enforces the engine boundary
 .github/workflows/deploy.yml
 ```
 
@@ -867,10 +877,11 @@ tests/                     mirrors src/; tests/engine/boundary.test.ts enforces 
   made single-attempt are left out as not needed, and kept when the call still retries.
 - Boundary: no file under `src/engine/` imports React, charting, or code outside the engine.
 - UI smoke tests (`tests/ui/`): the demo shows 12 findings (6 high) on first visit; findings are sorted high first
-  and collapsed, with the explanation behind "Why?"; applying the mitigations and
-  the re-check finds nothing left; an invalid config shows its error with the field path instead of crashing;
+  and collapsed, with the explanation behind "Why?"; applying the mitigations leaves nothing on the re-check; an invalid config shows its error with the field path instead of crashing;
   one click applies and simulates (in-process runner), shows the loading state, then the outcome cards, the recovery
-  row (did not recover / immediately) and the note on the near-zero mitigated line during the fault.
+  row (did not recover / immediately) and the note on the near-zero mitigated line during the fault; a partial
+  selection simulates only the selected change and leaves the original unchanged; "Reset to demo" is disabled on
+  the demo, and after an edit brings back the 12 findings and clears the results.
 - Simulator: identical arrivals across runs; same config + seed gives identical metrics; matching per-request draws
   across configs; request conservation per service; wasted fraction never exceeds 1; success ratio stays high in a
   no-fault run; the acceptance criteria of §11.4.
@@ -880,7 +891,7 @@ to GitHub Pages at `https://rgrandl.github.io/config-analyzer/`. Requires Settin
 
 **Deliberate simplifications:** one aggregated instance per service; sequential calls only; no connection pools,
 circuit breakers or hedging; all failures retryable; zero-cost drops; healthy latencies ignore queueing (the
-simulator checks the consequences).
+simulator checks the consequences). README.md lists these, with the known quirks, for readers of the app.
 
 ## 13. Extensions (placeholders)
 

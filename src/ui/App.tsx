@@ -147,11 +147,15 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
     });
   }
 
-  function loadDemo() {
+  /** Back to the first visit: the demo, everything selected, no results. */
+  function resetDemo() {
+    running.current?.abort();
     setSystemText(DEMO_SYSTEM_YAML);
     setScenarioText(DEMO_SCENARIO_YAML);
     setDeselected(new Set());
     setHighlightedId(undefined);
+    setMitigation({ state: { kind: 'none' }, key: '' });
+    setSimulation({ kind: 'idle' });
   }
 
   return (
@@ -216,7 +220,8 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
             scenarioErrors={scenario === null ? null : scenario.ok ? [] : scenario.errors}
             onSystemChange={setSystemText}
             onScenarioChange={setScenarioText}
-            onLoadDemo={loadDemo}
+            onResetDemo={resetDemo}
+            isDemo={isDemo}
           />
         </ErrorBoundary>
         )}

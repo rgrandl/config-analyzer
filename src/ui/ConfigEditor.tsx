@@ -12,7 +12,9 @@ interface Props {
   readonly scenarioErrors: readonly ConfigError[] | null;
   readonly onSystemChange: (text: string) => void;
   readonly onScenarioChange: (text: string) => void;
-  readonly onLoadDemo: () => void;
+  /** Puts the demo back; disabled while the demo is unchanged. */
+  readonly onResetDemo: () => void;
+  readonly isDemo: boolean;
 }
 
 export function ConfigEditor(props: Props) {
@@ -38,14 +40,14 @@ export function ConfigEditor(props: Props) {
           {tabLabel('system', 'System', props.systemErrors.length)}
           {tabLabel('scenario', 'Scenario', props.scenarioErrors?.length ?? 0)}
         </div>
-        <button type="button" className="button-quiet" onClick={props.onLoadDemo}>
-          Load demo
+        <button type="button" className="button-quiet" disabled={props.isDemo} onClick={props.onResetDemo}>
+          Reset to demo
         </button>
       </div>
       <p className="hint">
         {tab === 'system'
-          ? 'Services, their calls and their resilience settings. The analyzer reads only this.'
-          : 'Traffic and faults for the simulation: arrival rate, run length, and what goes wrong when.'}
+          ? 'Your services and their resilience settings. Findings come from this.'
+          : 'The traffic and the fault to simulate, identical for both configs.'}
       </p>
       <textarea
         className="code"

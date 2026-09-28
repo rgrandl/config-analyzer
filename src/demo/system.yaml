@@ -1,5 +1,19 @@
-# The demo system: api calls orders, which calls db twice.
-# Each setting looks reasonable on its own; together they fail to recover from a short db slowdown.
+# System config: the services, the calls between them, and each one's resilience settings.
+# The analyzer reads only this file; the simulator runs it and its mitigated copy.
+#
+#   networkLatencyMs         one-way latency of every call; a call's round trip is twice this
+#   entry                    the service users call, and how long a user waits (deadlineMs)
+#   services:
+#     workers                requests a service works on at once; each holds a worker while it waits on calls
+#     queueCapacity          requests that can wait for a worker (a number, or unbounded); more are rejected
+#     serviceTimeMs          the service's own work per request; serviceTimeJitter 0.5 varies it by up to ±50%
+#     deadlinePropagation    honor the caller's deadline and pass it on, so stale work is dropped
+#     calls                  made in order, one after another: timeoutMs per attempt, maxAttempts including
+#                            the first, and optionally backoff { baseMs, multiplier, maxMs, jitter } and
+#                            retryBudget { ratio, maxTokens }
+#
+# The demo: api calls orders, which calls db twice. Each setting looks reasonable on its own;
+# together they fail to recover from a short db slowdown.
 version: 1
 networkLatencyMs: 1
 entry: { service: api, deadlineMs: 1000 }
