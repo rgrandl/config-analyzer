@@ -69,7 +69,7 @@ settings is safe in combination.
 
 ```mermaid
 flowchart TD
-    J1["Load the demo<br/>or paste own system + scenario YAML"] --> J2["Read validation errors, fix them"]
+    J1["Open the page: the demo is already loaded<br/>(or edit in own system + scenario YAML)"] --> J2["Read validation errors, fix them"]
     J2 --> J3["See the call graph<br/>with finding badges"]
     J3 --> J4["Open a finding:<br/>why it is risky, the numbers,<br/>the recommended patch"]
     J4 --> J5["Select mitigations<br/>(all selected by default)"]
@@ -84,7 +84,8 @@ flowchart TD
 
 **Walkthrough with the demo**
 
-1. The user clicks **Load demo**. The graph shows `api → orders → db` with badges on all three services.
+1. The user opens the page. The demo is already loaded: the graph shows `api → orders → db` with badges on all three
+   services, and the 12 findings are listed below it.
 2. The top finding reads: *"api → orders retries 3× and orders → db also retries 3×: up to 18 db attempts per user
    request. Recommended: set api → orders maxAttempts 3 → 1."*
 3. The user applies all mitigations. The panel lists 12 applied findings and **0 unresolved**.
@@ -567,24 +568,39 @@ whether the run was truncated.
 
 ### 10.3 Layout
 
+One page, four steps top to bottom. The demo is loaded on the first visit, so a reviewer sees the graph and the 12
+findings without a click, and the primary button at the top gets to the results in one click.
+
 ```
-+----------------------------------------------------------------------------------------+
-|  Config Interaction Analyzer            [Load demo] [Apply selected] [Run simulation]   |
-+----------------------+-------------------------------+----------------------------------+
-| [System] [Scenario]  |          call graph           |  Findings (12)                   |
-|                      |                               |  [x] high  retry amplification   |
-|  YAML editor         |   api ──► orders ══► db       |      api → orders: 3 → 1         |
-|                      |    ●5      ●5       ●2        |  [x] high  deadline overrun ...  |
-|  validation errors   |   (edges: timeout · attempts) |  ---- after apply ----           |
-|                      |                               |  applied 12 · unresolved 0       |
-+----------------------+-------------------------------+----------------------------------+
-|  Summary: baseline · during fault · after · recovery time · false timeouts (orig | mit)  |
-|  [goodput + threshold]  [queue depth]  [first vs retry arrivals]  [wasted work]         |
-|  service picker for the last three charts (default: faulted service)                    |
-+----------------------------------------------------------------------------------------+
+Config Interaction Analyzer
+One paragraph: what the tool does.
++------------------------------------------------------------------------------------------+
+| 12 risky combinations across api, orders, db.            [Apply mitigations and simulate] |
++------------------------------------------------------------------------------------------+
+1. Configure                                                               [Edit the config]
+   "The demo is loaded: ..."  (the editor is collapsed; it opens by itself when there are errors)
+   System | Scenario tabs · YAML text · errors listed with their field path · Load demo
+2. Review the findings
+   +----------------------------------------------------------------------------------+
+   |  [api ●5] ── placeOrder: 900 ms × 3 ──► [orders ●5] ── readStock, writeOrder ──► [db ●2] |
+   +----------------------------------------------------------------------------------+
+   12 findings, 12 selected                                                     [Select none]
+   [x] High  title · target · explanation · recommended change (from → to)
+3. Apply the mitigations                                                  [Apply 12 selected]
+   14 changes applied · re-check: nothing left · applied patches · still unresolved · new
+   Mitigated config (YAML), with "Copy into the editor"
+4. Simulate                   (4b: loading state, summary cards, charts, explanations)
 ```
 
-All charts overlay original vs. mitigated with the fault window shaded.
+- The call graph runs left to right on wide screens and top to bottom below 700 px, where a left-to-right graph would
+  shrink its text below reading size. Selecting a finding highlights its service or call.
+- Results that no longer match the config or the selection are kept but marked out of date, with a button to redo
+  the step.
+- Every panel sits inside an error boundary: if one ever fails to render, it shows the error and the rest of the page
+  keeps working. A failure to apply mitigations is shown as a message, and the original config stays usable.
+- Visual language: IBM Plex Sans for the interface and IBM Plex Mono only for code (YAML, patch values), bundled
+  with the app rather than loaded from a font service. Red is the original config, teal the mitigated one, amber the
+  fault; lines also differ in style (solid vs. dashed), so color never carries meaning alone.
 
 Badges count findings per service. A call's findings count on the **calling** service (the one that owns the
 setting); the edge is highlighted when one of them is selected. Demo: api 5, orders 5, db 2 = 12.
@@ -712,7 +728,8 @@ update §11.
 
 ## 12. Build, test, deploy
 
-**Stack:** TypeScript, React + Vite, `yaml`, Recharts, Vitest.
+**Stack:** TypeScript, React + Vite, `yaml`, Recharts, Vitest; React Testing Library and jsdom for the UI smoke
+tests; the IBM Plex fonts through `@fontsource`.
 
 ```
 src/
@@ -749,11 +766,14 @@ src/
       summary.ts           summarizeRun: the numbers for the summary cards
       compare.ts           compareRuns: arrivals generated once, four runs, each with its summary
   ui/
-    App.tsx                state: config text, analysis, selected findings, results
+    App.tsx                the page and its only state: config text, selection, mitigation and simulation results
     ConfigEditor.tsx       System and Scenario tabs, validation errors
-    CallGraphView.tsx      services, calls, finding badges
-    FindingsPanel.tsx      findings and patches; after Apply: applied, unresolved, new, mitigated YAML
-    ResultsPanel.tsx       summary cards and the four charts
+    CallGraphView.tsx      services, calls, finding badges, highlighting; horizontal or vertical layout
+    FindingsPanel.tsx      FindingsList (findings and patches) and MitigationView (applied, unresolved, new, YAML)
+    ResultsPanel.tsx       summary cards, charts and explanations (4b)
+    ErrorBoundary.tsx      keeps one panel's failure from breaking the page
+    format.ts              engine values in plain words, e.g. "backoff: none → 10 ms × 2, up to 100 ms, full jitter"
+    styles.css             tokens first; one stylesheet
   demo/                    system.yaml, scenario.yaml, index.ts (raw-text import; outside the engine)
   main.tsx
 tests/                     mirrors src/; tests/engine/boundary.test.ts enforces the engine boundary
@@ -772,6 +792,9 @@ tests/                     mirrors src/; tests/engine/boundary.test.ts enforces 
 - Demo: exactly the 12 findings of §11.3; 0 unresolved after one apply.
 - Registry (`patchableFields`): the never-raise invariant; patching an unlisted field fails.
 - Boundary: no file under `src/engine/` imports React, charting, or code outside the engine.
+- UI smoke tests (`tests/ui/`): the demo shows 12 findings on first visit; one click applies the mitigations and
+  the re-check finds nothing left; an invalid config shows its error with the field path instead of crashing; (4b)
+  running the simulation shows the recovery cards.
 - Simulator: identical arrivals across runs; same config + seed gives identical metrics; matching per-request draws
   across configs; request conservation per service; wasted fraction never exceeds 1; success ratio stays high in a
   no-fault run; the acceptance criteria of §11.4.

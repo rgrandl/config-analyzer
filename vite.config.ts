@@ -7,6 +7,6 @@ export default defineConfig({
   base: '/config-analyzer/',
   plugins: [react()],
   test: {
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.{ts,tsx}'],
   },
 });

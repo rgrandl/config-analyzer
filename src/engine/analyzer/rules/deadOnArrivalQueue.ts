@@ -24,7 +24,7 @@ export const deadOnArrivalQueue: Rule = {
         rule: 'dead-on-arrival-queue',
         severity: 'high',
         target,
-        title: `${service}'s queue can hold work nobody will wait for`,
+        title: `The ${service} queue can hold work nobody will wait for`,
         explanation:
           `A full queue of ${capacity === 'unbounded' ? 'unbounded length' : capacity} at ` +
           `${Math.round(budget.throughputPerMs * 1000)} requests/s means a wait of up to ${formatMs(budget.maxQueueWaitMs)}. ` +
