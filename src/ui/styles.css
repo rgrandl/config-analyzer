@@ -63,10 +63,17 @@ code,
 }
 
 .lede {
-  max-width: 68ch;
-  margin: 0 0 20px;
+  max-width: 72ch;
+  margin: 0 0 6px;
   color: var(--ink-soft);
   font-size: 17px;
+}
+
+.lede-scope {
+  max-width: 72ch;
+  margin: 0 0 20px;
+  color: var(--ink-soft);
+  font-size: 14px;
 }
 
 .hero-action {
@@ -87,6 +94,55 @@ code,
   font-weight: 500;
 }
 
+.hero-status p {
+  margin: 0;
+}
+
+.shortcut {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.walk-through {
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.walk-through:hover {
+  color: var(--ink);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+.hero-count {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.hero-detail {
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+.preview {
+  padding: 12px 14px;
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+}
+
+.preview p {
+  margin: 0;
+}
+
+.preview .hint {
+  margin-top: 4px;
+}
+
 /* Steps ------------------------------------------------------------------- */
 
 .step {
@@ -95,6 +151,7 @@ code,
 }
 
 .step h2 {
+  scroll-margin-top: 16px;
   margin: 0 0 12px;
   font-size: 19px;
   font-weight: 600;
@@ -365,6 +422,7 @@ textarea.code {
 }
 
 .finding-head input {
+  flex: none;
   margin-top: 4px;
   width: 16px;
   height: 16px;
@@ -372,6 +430,7 @@ textarea.code {
 }
 
 .finding-title {
+  flex: 1;
   padding: 0;
   border: none;
   background: none;
@@ -379,6 +438,14 @@ textarea.code {
   font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
+}
+
+.why {
+  flex: none;
+  padding: 2px 10px;
+  border-color: var(--rule);
+  color: var(--ink-soft);
+  font-size: 13px;
 }
 
 .severity {
@@ -401,41 +468,89 @@ textarea.code {
   color: var(--medium);
 }
 
-.finding-target {
-  margin: 2px 0 0 26px;
-  color: var(--ink-soft);
-  font-size: 13px;
-}
-
-.finding-text {
-  margin: 6px 0 0 26px;
-  max-width: 72ch;
+.finding-fix {
+  margin: 4px 0 0 26px;
   font-size: 14px;
 }
 
-.finding-fix {
-  margin: 8px 0 0 26px;
-  padding: 8px 10px;
+.fix-label {
+  color: var(--mitigated-ink);
+  font-weight: 600;
+}
+
+.finding-fix code {
+  margin-left: 10px;
+  padding: 1px 6px;
   border-radius: 4px;
   background: #eaf3f0;
-  font-size: 14px;
-}
-
-.finding-fix p {
-  margin: 0 0 2px;
-  color: var(--mitigated-ink);
-  font-weight: 500;
-}
-
-.finding-fix ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  white-space: nowrap;
 }
 
 .finding-fix-none {
-  background: var(--paper);
   color: var(--ink-soft);
+}
+
+.finding-more {
+  margin: 8px 0 0 26px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--rule);
+  font-size: 14px;
+}
+
+.finding-more p {
+  margin: 0;
+  max-width: 76ch;
+}
+
+.finding-patches {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.glossary {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.glossary summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+
+.glossary dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.glossary dt {
+  font-weight: 600;
+}
+
+.glossary dd {
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .glossary dl {
+    grid-template-columns: 1fr;
+  }
+
+  .glossary dd {
+    margin-bottom: 6px;
+  }
+
+  .finding-fix code {
+    display: inline-block;
+    margin: 2px 0 0;
+    white-space: normal;
+  }
 }
 
 /* Mitigation result ---------------------------------------------------------- */
@@ -534,15 +649,47 @@ textarea.code {
   gap: 16px;
 }
 
-.verdict {
-  margin: 0;
+.verdict-lead {
+  margin: 0 0 8px;
+  font-weight: 500;
+}
+
+.outcomes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.outcome {
   padding: 14px 16px;
   border: 1px solid var(--rule);
-  border-left: 4px solid var(--mitigated-ink);
+  border-top: 4px solid var(--original);
   border-radius: var(--radius);
   background: var(--surface);
-  font-size: 17px;
-  font-weight: 500;
+}
+
+.outcome-mitigated {
+  border-top-color: var(--mitigated);
+}
+
+.outcome p {
+  margin: 0;
+}
+
+.outcome-config {
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.outcome-result {
+  margin: 4px 0 2px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.outcome-detail {
+  color: var(--ink-soft);
+  font-size: 14px;
 }
 
 .results .notice {

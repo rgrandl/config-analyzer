@@ -1,4 +1,4 @@
-// Step 4: what the simulation showed. A one-sentence verdict, the numbers side by side, notes where the data
+// Step 4: what the simulation showed. One outcome card per config, the numbers side by side, notes where the data
 // could be misread, and four charts that overlay the original (solid red) and mitigated (dashed teal) runs.
 import { useState } from 'react';
 import {
@@ -52,35 +52,50 @@ export function ResultsPanel({ comparison, system, scenario }: Props) {
 // Verdict and summary
 // ---------------------------------------------------------------------------
 
+/** One card per config: did it recover, and how much succeeded after the fault. */
 function Verdict({ comparison, scenario }: { readonly comparison: Comparison; readonly scenario: Scenario }) {
   if (scenario.faults.length === 0) {
-    return <p className="verdict">The scenario has no fault, so there is nothing to recover from. Add a fault to compare recovery.</p>;
+    return <p className="verdict-lead">The scenario has no fault, so there is nothing to recover from. Add a fault to compare recovery.</p>;
   }
-  const phrase = (recovery: Recovery) => {
-    switch (recovery.status) {
-      case 'recovered':
-        return recovery.recoveryTimeMs === 0
-          ? 'recovered as soon as it ended'
-          : `recovered ${formatNumber((recovery.recoveryTimeMs ?? 0) / 1000)} s after it ended`;
-      case 'not-recovered':
-        return 'never recovered';
-      case 'unknown':
-        return 'did not show whether it recovers, because the run stopped early';
-      case 'not-applicable':
-        return 'was already failing before it';
-    }
+  const card = (kind: 'original' | 'mitigated', run: SummarizedRun) => {
+    const after = run.summary.successRatio.after;
+    return (
+      <div className={`outcome outcome-${kind}`} data-testid={`outcome-${kind}`}>
+        <p className="outcome-config">
+          <span className={`swatch swatch-${kind}`}>{kind === 'original' ? 'Original config' : 'Mitigated config'}</span>
+        </p>
+        <p className="outcome-result">{outcomeText(run.summary.recovery)}</p>
+        {after !== null && <p className="outcome-detail">{formatNumber(after * 100)}% of requests succeed after the fault</p>}
+      </div>
+    );
   };
   return (
-    <p className="verdict">
-      After {describeFaults(scenario)}, the <span className="swatch swatch-original">original config</span>{' '}
-      {phrase(comparison.original.withFaults.summary.recovery)}; the{' '}
-      <span className="swatch swatch-mitigated">mitigated config</span> {phrase(comparison.mitigated.withFaults.summary.recovery)}.
-    </p>
+    <div className="verdict">
+      <p className="verdict-lead">After {describeFaults(scenario)}:</p>
+      <div className="outcomes">
+        {card('original', comparison.original.withFaults)}
+        {card('mitigated', comparison.mitigated.withFaults)}
+      </div>
+    </div>
   );
+}
+
+function outcomeText(recovery: Recovery): string {
+  switch (recovery.status) {
+    case 'recovered':
+      return recovery.recoveryTimeMs === 0 ? 'Recovered immediately' : `Recovered ${recoveryText(recovery)}`;
+    case 'not-recovered':
+      return 'Did not recover';
+    case 'unknown':
+      return 'Recovery unknown: the run stopped early';
+    case 'not-applicable':
+      return 'Already failing before the fault';
+  }
 }
 
 function SummaryTable({ comparison, scenario }: { readonly comparison: Comparison; readonly scenario: Scenario }) {
   const hasFaults = scenario.faults.length > 0;
+  const wasted = mostWasted(comparison.original.withFaults);
   const percent = (value: number | null) => (value === null ? 'n/a' : `${formatNumber(value * 100)}%`);
   const perSecond = (value: number | null) => (value === null ? 'n/a' : `${formatNumber(value)}/s`);
   const rows: { label: string; value: (run: { withFaults: SummarizedRun; withoutFaults: SummarizedRun }) => string }[] = [
@@ -98,7 +113,7 @@ function SummaryTable({ comparison, scenario }: { readonly comparison: Compariso
       value: (r: RunPair) =>
         `${r.withoutFaults.summary.timeouts.toLocaleString('en-US')} (${formatNumber(r.withoutFaults.summary.timeoutFraction * 100)}% of attempts)`,
     },
-    { label: 'Most wasted work', value: (r: RunPair) => mostWasted(r.withFaults) },
+    ...(wasted ? [{ label: `Wasted work at ${wasted}`, value: (r: RunPair) => percent(r.withFaults.summary.wastedFraction[wasted] ?? 0) }] : []),
   ];
   return (
     <table className="summary">
@@ -132,7 +147,7 @@ type RunPair = { readonly withFaults: SummarizedRun; readonly withoutFaults: Sum
 function recoveryText(recovery: Recovery): string {
   switch (recovery.status) {
     case 'recovered':
-      return `after ${formatNumber((recovery.recoveryTimeMs ?? 0) / 1000)} s`;
+      return recovery.recoveryTimeMs === 0 ? 'immediately' : `${formatNumber((recovery.recoveryTimeMs ?? 0) / 1000)} s after it ended`;
     case 'not-recovered':
       return 'did not recover';
     case 'unknown':
@@ -142,9 +157,10 @@ function recoveryText(recovery: Recovery): string {
   }
 }
 
-function mostWasted(run: SummarizedRun): string {
+/** The service that wastes the most work in the given run, or undefined when none wastes any. */
+function mostWasted(run: SummarizedRun): string | undefined {
   const [service, fraction] = Object.entries(run.summary.wastedFraction).sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
-  return fraction < 0.005 ? 'none' : `${service}: ${formatNumber(fraction * 100)}% of its work`;
+  return fraction < 0.005 ? undefined : service;
 }
 
 /**
@@ -155,13 +171,13 @@ function DuringFaultNote({ comparison, scenario }: { readonly comparison: Compar
   const { summary } = comparison.mitigated.withFaults;
   if ((summary.successRatio.during ?? 1) >= 0.1 || summary.recovery.status !== 'recovered') return null;
   const lastEnd = Math.max(...scenario.faults.map((fault) => fault.endMs)) / 1000;
+  const services = [...new Set(scenario.faults.map((fault) => fault.service))];
+  const during = services.length === 1 ? `while ${services[0]} is slowed` : 'during the fault';
   return (
     <div className="notice notice-explain" data-testid="during-fault-note">
       <p>
-        <strong>Both lines drop to near zero during the fault. That is expected.</strong> The slowed service can serve
-        only a fraction of the traffic, and the mitigated queues are sized for normal speed, so requests that could not
-        finish in time are dropped at once instead of being served after their caller gave up. The mitigations do not
-        make a service faster; what they change is what happens after the fault. Compare the lines after {formatNumber(lastEnd)} s.
+        Both configs serve almost nothing {during}; that is expected. The difference is what happens after the fault
+        ends at {formatNumber(lastEnd)} s.
       </p>
     </div>
   );
@@ -201,11 +217,11 @@ function Charts({ comparison, system, scenario }: Props) {
         </div>
         <p className="hint">
           {headline === 'goodput'
-            ? 'Requests answered within the user deadline, per second. The shaded band is the fault.'
+            ? 'Requests answered within the user deadline, per second (1 s average). The shaded band is the fault.'
             : 'Of the requests that arrived in each 1 s window, the share answered in time. Recovery is measured on this: the mitigated run recovers once it stays above the dotted threshold.'}
         </p>
         {headline === 'goodput' ? (
-          <TimeChart rows={goodputRows(withFaults.original.result, withFaults.mitigated.result, bucketMs)} scenario={scenario} unit="/s" height={280} />
+          <TimeChart rows={goodputRows(withFaults.original.result, withFaults.mitigated.result, bucketMs, GOODPUT_AVERAGE_MS)} scenario={scenario} unit="/s" height={280} />
         ) : (
           <TimeChart
             rows={successRatioRows(withFaults.original, withFaults.mitigated, system.entry.deadlineMs, scenario.recovery.windowMs, bucketMs)}
@@ -237,6 +253,9 @@ function Charts({ comparison, system, scenario }: Props) {
     </div>
   );
 }
+
+/** The goodput chart averages over this long, so bucket-to-bucket noise does not hide the shape. */
+const GOODPUT_AVERAGE_MS = 1000;
 
 function Legend({ hasFaults }: { readonly hasFaults: boolean }) {
   return (

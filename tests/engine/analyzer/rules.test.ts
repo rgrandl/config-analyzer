@@ -118,7 +118,8 @@ describe('deadline-budget-overrun', () => {
     const onA = analyze(config).findings.filter((f) => f.target.service === 'a' && f.rule !== 'missing-deadline-propagation');
     expect(onA.map((f) => f.id)).toEqual(['deadline-budget-overrun:a']);
     expect(onA[0]?.mitigation).toBeNull();
-    expect(onA[0]?.explanation).toMatch(/a has 12 ms \(the 12 ms timeout of s → a \(toA\)\)/);
+    expect(onA[0]?.title).toBe('a needs 15 ms even when healthy, but gets 12 ms');
+    expect(onA[0]?.explanation).toMatch(/a has 12 ms \(the 12 ms timeout of toA\)/);
   });
 
   it('skips a service starved by a share at or below the round trip', () => {
@@ -238,19 +239,19 @@ describe('missing-deadline-propagation', () => {
 
   it('describes a leaf service by what the flag does for it: dropping stale work', () => {
     // Plan: take the demo's db, which makes no calls.
-    // Verifies: the title and fix speak of honoring callers' deadlines, and the text mentions neither retries
-    //   nor callees, which db does not have.
+    // Verifies: the title names who stops waiting and when, the fix speaks of honoring callers' deadlines,
+    //   and the text mentions neither retries nor callees, which db does not have.
     const [db] = findingsOf(demoSystem(), 'missing-deadline-propagation').filter((f) => f.target.service === 'db');
-    expect(db?.title).toBe("db ignores its callers' deadlines");
+    expect(db?.title).toBe('db keeps working after orders stops waiting (150 ms)');
     expect(db?.mitigation?.summary).toBe("Honor its callers' deadlines");
     expect(db?.explanation).not.toMatch(/retrying|callees/);
   });
 
   it('mentions retries and callees for a service that has them', () => {
     // Plan: take the demo's orders, which calls db with retries.
-    // Verifies: the title says it does not propagate deadlines, and the text covers both retries and callees.
+    // Verifies: the title names api's 900 ms timeout, and the text covers both retries and callees.
     const [orders] = findingsOf(demoSystem(), 'missing-deadline-propagation').filter((f) => f.target.service === 'orders');
-    expect(orders?.title).toBe('orders does not propagate deadlines');
+    expect(orders?.title).toBe('orders keeps working after api stops waiting (900 ms)');
     expect(orders?.explanation).toMatch(/serving and retrying/);
     expect(orders?.explanation).toMatch(/its callees cannot tell/);
   });
@@ -273,7 +274,7 @@ describe('dead-on-arrival-queue', () => {
     // Verifies: no "limited by" clause, and the budget is attributed to the tightest call into db.
     const [db] = findingsOf(demoSystem(), 'dead-on-arrival-queue').filter((f) => f.target.service === 'db');
     expect(db?.explanation).not.toContain('limited by');
-    expect(db?.explanation).toContain('148 ms db has (the 150 ms timeout of orders → db (readStock) minus');
+    expect(db?.explanation).toContain('148 ms db has (the 150 ms timeout of readStock minus');
   });
 
   // A single service: 1 worker, 10 ms per request, so it completes 0.1 requests/ms.
@@ -326,5 +327,48 @@ describe('finding text', () => {
       .flatMap((f) => [f.title, f.explanation, f.mitigation?.summary ?? '']);
     expect(texts.length).toBeGreaterThan(20);
     for (const text of texts) expect(text).not.toMatch(/undefined|NaN/);
+  });
+});
+
+describe('finding titles', () => {
+  it('state the consequence with its number, so the titles alone tell the demo story', () => {
+    // Plan: analyze the demo system.
+    // Verifies: the 12 titles, in rule order.
+    expect(analyze(demoSystem()).findings.map((f) => f.title)).toEqual([
+      'placeOrder retries multiply: up to 18 db attempts per user request',
+      'placeOrder can take 2730 ms, but api has 995 ms for it',
+      'writeOrder can take 480 ms, but orders has 410.5 ms left for it',
+      'placeOrder retries immediately, with no backoff, jitter or retry budget',
+      'readStock retries immediately, with no backoff, jitter or retry budget',
+      'writeOrder retries immediately, with no backoff, jitter or retry budget',
+      "api keeps working after the user's 1000 ms deadline",
+      'orders keeps working after api stops waiting (900 ms)',
+      'db keeps working after orders stops waiting (150 ms)',
+      'A full api queue holds 5 s of work, but the user waits 1000 ms',
+      'A full orders queue holds 5 s of work, but api waits 900 ms',
+      'A full db queue holds 2.5 s of work, but orders waits 150 ms',
+    ]);
+  });
+
+  it('name a call by its caller only when another service has a call of the same name', () => {
+    // Plan: s and a both make a retrying call named "get", to a and b.
+    // Verifies: the unguarded-retries titles say "s.get" and "a.get", not a bare "get".
+    const config = system({
+      s: service({ calls: [call('get', 'a', { maxAttempts: 2 })] }),
+      a: service({ calls: [call('get', 'b', { maxAttempts: 2 })] }),
+      b: service(),
+    });
+    expect(findingsOf(config, 'unguarded-retries').map((f) => f.title.split(' ')[0])).toEqual(['s.get', 'a.get']);
+  });
+
+  it('name only the missing guards, and say "immediately" only without a backoff delay', () => {
+    // Plan: a retrying call with a backoff but no jitter and no retry budget.
+    // Verifies: the title lists jitter and retry budget with "or" and does not say "immediately".
+    const backoff = { baseMs: 10, multiplier: 2, maxMs: 100, jitter: 'none' as const };
+    const [finding] = findingsOf(
+      system({ s: service({ calls: [call('toA', 'a', { maxAttempts: 2, backoff })] }), a: service() }),
+      'unguarded-retries',
+    );
+    expect(finding?.title).toBe('toA retries with no jitter or retry budget');
   });
 });

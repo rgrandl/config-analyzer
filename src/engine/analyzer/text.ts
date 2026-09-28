@@ -12,8 +12,14 @@ export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
-/** "a", "a and b", "a, b and c". */
-export function listPhrase(items: readonly string[]): string {
+/** Durations for titles: "148 ms" below a second, "2.5 s" from a second on. */
+export function formatDuration(value: Ms): string {
+  if (!Number.isFinite(value)) return '∞ s';
+  return value < 1000 ? formatMs(value) : `${Math.round(value / 100) / 10} s`;
+}
+
+/** "a", "a and b", "a, b and c"; or "a, b or c" with `conjunction` "or". */
+export function listPhrase(items: readonly string[], conjunction: 'and' | 'or' = 'and'): string {
   if (items.length <= 1) return items.join('');
-  return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+  return `${items.slice(0, -1).join(', ')} ${conjunction} ${items.at(-1)}`;
 }

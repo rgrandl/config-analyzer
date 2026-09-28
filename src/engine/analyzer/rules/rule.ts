@@ -32,9 +32,29 @@ export function findingId(rule: RuleId, target: Target): string {
   return `${rule}:${targetKey(target)}`;
 }
 
-/** "orders → db (readStock)", for titles and explanations. */
-export function describeCall(edge: CallEdge): string {
-  return `${edge.caller} → ${edge.callee} (${edge.config.name})`;
+/**
+ * A call's short name for titles and explanations: "readStock", or "orders.readStock" when another service
+ * has a call of the same name. The UI shows where it is (the graph highlights it).
+ */
+export function callName(graph: CallGraph, caller: string, name: string): string {
+  const sameName = graph.calls.filter((edge) => edge.config.name === name);
+  return sameName.length > 1 ? `${caller}.${name}` : name;
+}
+
+/** callName for an edge. */
+export function nameOf(graph: CallGraph, edge: CallEdge): string {
+  return callName(graph, edge.caller, edge.config.name);
+}
+
+/**
+ * Who stops waiting for a service, and when, for titles: "the user waits 1000 ms", "api waits 900 ms". Taken
+ * from where its budget comes from (the user's deadline, or the tightest call into it), before the round trip.
+ */
+export function waiter(context: RuleContext, service: string): { who: string; ms: number } {
+  const source = context.budgets.service(service).budgetSource;
+  return source.kind === 'deadline'
+    ? { who: 'the user', ms: source.deadlineMs }
+    : { who: source.caller, ms: source.limitMs };
 }
 
 /**
@@ -65,8 +85,8 @@ export function budgetOrigin(context: RuleContext, service: string): string {
     source.kind === 'deadline'
       ? `the user's ${formatMs(source.deadlineMs)} deadline`
       : source.limitedBy === 'timeout'
-        ? `the ${formatMs(source.limitMs)} timeout of ${source.caller} → ${service} (${source.call})`
-        : `the ${formatMs(source.limitMs)} ${source.caller} has left for ${source.caller} → ${service} (${source.call})`;
+        ? `the ${formatMs(source.limitMs)} timeout of ${callName(context.graph, source.caller, source.call)}`
+        : `the ${formatMs(source.limitMs)} ${source.caller} has left for ${callName(context.graph, source.caller, source.call)}`;
   const { rttMs } = context.budgets;
   return rttMs > 0 ? `${origin} minus a ${formatMs(rttMs)} network round trip` : origin;
 }

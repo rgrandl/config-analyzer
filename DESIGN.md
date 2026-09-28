@@ -52,7 +52,7 @@ flowchart LR
     MC -->|mitigated config| R
     AS["Arrival source"] -->|same arrivals| R
     R --> RR["RunResult × 4<br/>(in a Web Worker)"]
-    RR --> UI["Verdict, summary, charts"]
+    RR --> UI["Outcome cards, summary, charts"]
 ```
 
 - **Engine** (`src/engine/`): pure TypeScript, no DOM, no React. Config (schema, parsing, validation, call graph),
@@ -89,12 +89,13 @@ flowchart TD
 
 1. The user opens the page. The demo is already loaded: the graph shows `api → orders → db` with badges on all three
    services, and the 12 findings are listed below it.
-2. The top finding reads: *"api → orders retries 3× and orders → db also retries 3×: up to 18 db attempts per user
-   request. Recommended: set api → orders maxAttempts 3 → 1."*
-3. The user clicks **Apply 12 mitigations and simulate** at the top. Step 3 lists the applied changes and
+2. The findings are sorted high first, two lines each. The top one reads: *"High · placeOrder retries multiply: up
+   to 18 db attempts per user request. Fix: Make it a single attempt, maxAttempts: 3 → 1"*, with "Why?" to open the
+   explanation. Read top to bottom, the titles alone tell the story.
+3. The user clicks **Quick demo: apply all 12 fixes and simulate** at the top. Step 3 lists the applied changes and
    **0 unresolved**; step 4 shows a loading state (with Cancel) and then the results.
-4. The verdict reads: *"After db was slowed 5× from 10 to 20 s, the original config never recovered; the mitigated
-   config recovered as soon as it ended."* The goodput chart shows both lines at about 140 requests/s before the fault and
+4. Two outcome cards read *"After db was slowed 5× from 10 to 20 s: Original config — Did not recover, 0% of
+   requests succeed after the fault"* and *"Mitigated config — Recovered immediately, 100%"*. The goodput chart shows both lines at about 140 requests/s before the fault and
    near zero during it. When the fault ends at t = 20 s, the mitigated line jumps straight back to about 140/s, while
    the original stays at 0 through t = 60 s (measured, seed 42; see §11.4).
 5. The user unchecks the deadline-propagation mitigations, re-applies and re-runs, and sees how recovery changes —
@@ -292,6 +293,22 @@ A queue cap turns overflow into fast rejections, which callers retry. That is in
 nothing, while a stale queued request costs a full service time and is retried anyway. It is safe together with a
 single retry layer, a retry budget, backoff with jitter and deadline propagation.
 
+**Titles** state the consequence with its number, so someone who reads only the titles gets the story. Calls are
+named by their short name (`placeOrder`), or `caller.name` when two services have a call of the same name; the
+explanation does not repeat the title.
+
+| Rule | Demo title |
+|---|---|
+| 1 | placeOrder retries multiply: up to 18 db attempts per user request |
+| 2 | writeOrder can take 480 ms, but orders has 410.5 ms left for it ("left" when earlier work or later calls take part of the time) |
+| 2, too slow | a needs 15 ms even when healthy, but gets 12 ms |
+| 3 | readStock retries immediately, with no backoff, jitter or retry budget (only the missing guards; "immediately" only without a backoff delay) |
+| 4 | db keeps working after orders stops waiting (150 ms); for the entry: api keeps working after the user's 1000 ms deadline |
+| 5 | A full db queue holds 2.5 s of work, but orders waits 150 ms |
+
+Who waits, and how long, comes from where the service's budget comes from (§6): the user's deadline or the
+tightest call into it, before the round trip.
+
 ### Example finding
 
 ```json
@@ -300,8 +317,8 @@ single retry layer, a retry budget, backoff with jitter and deadline propagation
   "rule": "deadline-budget-overrun",
   "severity": "high",
   "target": { "service": "orders", "call": "writeOrder" },
-  "title": "orders → db (writeOrder) can outlast the time orders has for it",
-  "explanation": "orders has 898 ms: the 900 ms timeout of api → orders (placeOrder) minus a 2 ms network round trip. Its local work and earlier calls can take up to 487.5 ms, leaving 410.5 ms for this call. 3 attempts of 150 ms can take 480 ms, so later attempts run after the caller has given up.",
+  "title": "writeOrder can take 480 ms, but orders has 410.5 ms left for it",
+  "explanation": "orders has 898 ms: the 900 ms timeout of placeOrder minus a 2 ms network round trip. Its local work and earlier calls can take up to 487.5 ms, leaving 410.5 ms for this call. 3 attempts of 150 ms can take 480 ms, so later attempts run after the caller has given up.",
   "evidence": { "budgetMs": 898, "elapsedBeforeMs": 487.5, "shareMs": 410.5, "worstCaseMs": 480, "floorMs": 34 },
   "mitigation": {
     "summary": "Reduce attempts to 2 (worst case 310 ms)",
@@ -589,9 +606,12 @@ findings without a click, and the primary button at the top gets to the results 
 
 ```
 Config Interaction Analyzer
-One paragraph: what the tool does.
+One paragraph: what the tool discovers, in general terms (each team's settings are reasonable alone but the
+combination fails under stress; analyze, recommend, simulate), then one line of scope: "This version covers
+resilience settings: timeouts, retries, backoff, deadlines and queues."
 +------------------------------------------------------------------------------------------+
-| 12 findings across api, orders, db.                   [Apply 12 mitigations and simulate] |
+| 12 findings                                 [Quick demo: apply all 12 fixes and simulate] |
+| 6 high · 6 medium, across api, orders, db.               or walk through the steps below ↓ |
 +------------------------------------------------------------------------------------------+
 1. Configure                                                               [Edit the config]
    "The demo is loaded: ..."  (the editor is collapsed; it opens by itself when there are errors)
@@ -601,24 +621,35 @@ One paragraph: what the tool does.
    |  [api ●5] ── placeOrder: 900 ms × 3 ──► [orders ●5] ── readStock, writeOrder ──► [db ●2] |
    +----------------------------------------------------------------------------------+
    12 findings, 12 selected                                                     [Select none]
-   [x] High  title · target · explanation · recommended change (from → to)
+   ▸ What the terms mean   (backoff and jitter, retry budget, deadline propagation, goodput; one sentence each)
+   [x] High  title (consequence + number)                                                   [Why?]
+             Fix: summary   maxAttempts: 3 → 1      (a multi-change fix lists its changes under "Why?")
+   ...high findings first, then medium
 3. Apply the mitigations                                                  [Apply 12 selected]
+   Before applying: a dashed preview of what appears here
    12 changes applied · re-check: nothing left · applied patches · not needed · still unresolved · new
    Mitigated config (YAML), with "Copy into the editor"
 4. Simulate                                                              [Run the simulation]
+   Before running: a dashed preview of what appears here
    While running: "Running the simulation (4 runs)…" with [Cancel]
-   Verdict: "After db was slowed 5× from 10 to 20 s, the original config never recovered; the mitigated ..."
-   Summary table: Original | Mitigated — success before / during / after, goodput after, recovery,
-                  timeouts without the fault, most wasted work
-   Note when the mitigated line is also near zero during the fault (why that is expected)
+   "After db was slowed 5× from 10 to 20 s:"
+   [Original config: Did not recover, 0% succeed after]   [Mitigated config: Recovered immediately, 100%]
+   Summary table: Original | Mitigated — success before / during / after, goodput after, recovery
+                  ("immediately" or "N s after it ended"), timeouts without the fault, wasted work at <the
+                  service that wastes the most in the original run>
+   Two-sentence note when the mitigated line is also near zero during the fault: "Both configs serve almost
+   nothing while db is slowed; that is expected. The difference is what happens after the fault ends at 20 s."
    Legend: original solid red · mitigated dashed teal · fault amber band
-   Headline chart: [Goodput | Success ratio]   (ratio view: recovery threshold + "Mitigated recovers" marker)
+   Headline chart: [Goodput (1 s average) | Success ratio]   (ratio view: recovery threshold + "Mitigated recovers" marker)
    Service picker (defaults to the faulted service) → queue depth · retries arriving/s · work wasted %
 ```
 
-- The primary button applies the current selection and then simulates, so the charts are one click away. With
-  nothing selected it reads "Simulate the config" (the mitigated config equals the original); while the scenario
-  is invalid it only applies, and step 4 says what to fix.
+- The top button is a shortcut through steps 3 and 4: it applies the current selection, simulates, and scrolls to
+  the results once they are there (not after a cancel), so the charts are one click away. On the untouched demo
+  with everything selected it reads "Quick demo: apply all 12 fixes and simulate"; otherwise "Shortcut: apply 9
+  selected fixes and simulate", or "Shortcut: simulate the config" with nothing selected (the mitigated config
+  then equals the original). While the scenario is invalid it only applies, and step 4 says what to fix. The link
+  under it scrolls to step 1 for those who want to go step by step.
 - Each simulation runs in a fresh worker, terminated when it answers or on Cancel; a cancelled run returns step 4
   to its idle state. A worker error is shown as a message in step 4.
 - A truncated run (event cap, §9.1) shows a notice that its results end early and its recovery is unknown.
@@ -807,7 +838,7 @@ src/
     ConfigEditor.tsx       System and Scenario tabs, validation errors
     CallGraphView.tsx      services, calls, finding badges, highlighting; horizontal or vertical layout
     FindingsPanel.tsx      FindingsList (findings and patches) and MitigationView (applied, unresolved, new, YAML)
-    ResultsPanel.tsx       verdict, summary table, notes (truncation, near-zero during the fault), charts
+    ResultsPanel.tsx       outcome cards, summary table, notes (truncation, near-zero during the fault), charts
     chartData.ts           run results → chart rows: goodput, success ratio by arrival window, per-service metrics
     simulation.ts          RunSimulation: runInWorker (the app) and runInProcess (tests)
     simulationWorker.ts    the worker: compareRuns on the posted configs and scenario
@@ -828,15 +859,17 @@ tests/                     mirrors src/; tests/engine/boundary.test.ts enforces 
   overrunning first call does not cascade findings; a negative-budget service.
 - Rules: a positive and a negative case each; throughput limited by a callee; rule 2 accounting for rule-3 backoff;
   a floor that binds (no mitigation); the unresolved / introduced split (a unit test, since the current rules
-  cannot introduce findings); the tolerance on a value that floating point puts just below its boundary.
+  cannot introduce findings); the tolerance on a value that floating point puts just below its boundary; the 12
+  demo titles; a call named by its caller when the name is not unique; only the missing guards in rule 3's title.
 - Demo: exactly the 12 findings of §11.3; 0 unresolved after one apply.
 - Registry (`patchableFields`): the never-raise invariant; patching an unlisted field fails; retry guards on a call
   made single-attempt are left out as not needed, and kept when the call still retries.
 - Boundary: no file under `src/engine/` imports React, charting, or code outside the engine.
-- UI smoke tests (`tests/ui/`): the demo shows 12 findings on first visit; one click applies the mitigations and
+- UI smoke tests (`tests/ui/`): the demo shows 12 findings (6 high) on first visit; findings are sorted high first
+  and collapsed, with the explanation behind "Why?"; applying the mitigations and
   the re-check finds nothing left; an invalid config shows its error with the field path instead of crashing;
-  one click applies and simulates (in-process runner), shows the loading state, then the verdict, the recovery row
-  (did not recover / after 0 s) and the note on the near-zero mitigated line during the fault.
+  one click applies and simulates (in-process runner), shows the loading state, then the outcome cards, the recovery
+  row (did not recover / immediately) and the note on the near-zero mitigated line during the fault.
 - Simulator: identical arrivals across runs; same config + seed gives identical metrics; matching per-request draws
   across configs; request conservation per service; wasted fraction never exceeds 1; success ratio stays high in a
   no-fault run; the acceptance criteria of §11.4.

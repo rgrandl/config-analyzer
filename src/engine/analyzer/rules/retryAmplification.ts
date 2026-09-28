@@ -2,7 +2,8 @@
 // layer should retry, since a retry there repeats the least work.
 import type { CallEdge, CallGraph } from '../../config/callGraph';
 import type { Finding } from '../finding';
-import { callTarget, describeCall, findingId, type Rule } from './rule';
+import { listPhrase } from '../text';
+import { callTarget, findingId, nameOf, type Rule } from './rule';
 
 export const retryAmplification: Rule = {
   id: 'retry-amplification',
@@ -16,25 +17,28 @@ export const retryAmplification: Rule = {
       if (below.length === 0) continue;
 
       const target = callTarget(edge);
-      const deepest = Math.max(...below.map((call) => attemptsPerRequest.get(call.callee) ?? 0));
+      // The service below that the most attempts can reach, per user request.
+      const [deepestService, deepest] = below
+        .map((call): [string, number] => [call.callee, attemptsPerRequest.get(call.callee) ?? 0])
+        .reduce((best, next) => (next[1] > best[1] ? next : best));
+      const name = nameOf(graph, edge);
       findings.push({
         id: findingId('retry-amplification', target),
         rule: 'retry-amplification',
         severity: 'high',
         target,
-        title: `${describeCall(edge)} retries, and so do calls below it`,
+        title: `${name} retries multiply: up to ${deepest} ${deepestService} attempts per user request`,
         explanation:
-          `${describeCall(edge)} makes up to ${edge.config.maxAttempts} attempts, and ` +
-          `${below.map((call) => call.id).join(', ')} below it retry too. Retries multiply across layers: ` +
-          `one user request can cause up to ${deepest} attempts at the deepest service. ` +
-          'Keeping retries only at the deepest layer repeats the least work.',
+          `${name} makes up to ${edge.config.maxAttempts} attempts, and ` +
+          `${listPhrase(below.map((call) => nameOf(graph, call)))} below it retry too. Each layer's attempts ` +
+          'repeat all the attempts below it. Keeping retries only at the deepest layer repeats the least work.',
         evidence: {
           maxAttempts: edge.config.maxAttempts,
           retryingBelow: below.map((call) => call.id).join(', '),
           worstAttemptsPerRequest: deepest,
         },
         mitigation: {
-          summary: `Make ${describeCall(edge)} a single attempt`,
+          summary: 'Make it a single attempt',
           patches: [{ target, field: 'maxAttempts', from: edge.config.maxAttempts, to: 1 }],
         },
       });

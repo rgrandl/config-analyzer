@@ -1,4 +1,4 @@
-# scenario.yaml — demo traffic and fault (DESIGN.md §11.1)
+# The demo traffic and fault: db slows down 5× from 10 to 20 s.
 version: 1
 rps: 140 # 280 db requests/s against 400/s capacity: 70% utilized
 durationMs: 60000

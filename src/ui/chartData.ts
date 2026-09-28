@@ -19,9 +19,23 @@ function paired(original: RunResult, mitigated: RunResult, value: (bucket: Bucke
   });
 }
 
-/** Successes within the deadline per second, by completion time. */
-export function goodputRows(original: RunResult, mitigated: RunResult, bucketMs: Ms): ChartRow[] {
-  return paired(original, mitigated, (bucket) => (bucket.goodput * 1000) / bucketMs);
+/**
+ * Successes within the deadline per second, by completion time; averaged over the `averageMs / bucketMs`
+ * buckets around each one when given (at the edges, over the buckets that exist).
+ */
+export function goodputRows(original: RunResult, mitigated: RunResult, bucketMs: Ms, averageMs: Ms = bucketMs): ChartRow[] {
+  const rows = paired(original, mitigated, (bucket) => (bucket.goodput * 1000) / bucketMs);
+  const width = Math.max(1, Math.round(averageMs / bucketMs));
+  if (width === 1) return rows;
+  const before = Math.floor((width - 1) / 2);
+  const average = (index: number, key: 'original' | 'mitigated') => {
+    const values = rows
+      .slice(Math.max(0, index - before), index - before + width)
+      .map((row) => row[key])
+      .filter((value): value is number => value !== null);
+    return values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length;
+  };
+  return rows.map((row, index) => ({ t: row.t, original: average(index, 'original'), mitigated: average(index, 'mitigated') }));
 }
 
 /**

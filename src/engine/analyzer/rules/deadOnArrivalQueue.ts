@@ -3,8 +3,8 @@
 import { exceeds } from '../compare';
 import { QUEUE_HEADROOM } from '../defaults';
 import type { Finding, Mitigation } from '../finding';
-import { formatMs } from '../text';
-import { budgetOrigin, cannotFinishWhenHealthy, findingId, serviceTarget, throughputOrigin, type Rule } from './rule';
+import { formatDuration, formatMs } from '../text';
+import { budgetOrigin, cannotFinishWhenHealthy, findingId, serviceTarget, throughputOrigin, waiter, type Rule } from './rule';
 
 export const deadOnArrivalQueue: Rule = {
   id: 'dead-on-arrival-queue',
@@ -24,7 +24,10 @@ export const deadOnArrivalQueue: Rule = {
         rule: 'dead-on-arrival-queue',
         severity: 'high',
         target,
-        title: `The ${service} queue can hold work nobody will wait for`,
+        title:
+          capacity === 'unbounded'
+            ? `The ${service} queue is unbounded, but ${waitPhrase(waiter(context, service))}`
+            : `A full ${service} queue holds ${formatDuration(budget.maxQueueWaitMs)} of work, but ${waitPhrase(waiter(context, service))}`,
         explanation:
           `A full queue of ${capacity === 'unbounded' ? 'unbounded length' : capacity} at ` +
           `${Math.round(budget.throughputPerMs * 1000)} requests/s${throughputOrigin(context, service)} means a wait of ` +
@@ -44,6 +47,11 @@ export const deadOnArrivalQueue: Rule = {
     return findings;
   },
 };
+
+/** "the user waits 1000 ms", "orders waits 150 ms". */
+function waitPhrase({ who, ms }: { who: string; ms: number }): string {
+  return `${who} waits ${formatMs(ms)}`;
+}
 
 /**
  * Cap the queue so it drains within half of the time left after the work itself (there is some: the service

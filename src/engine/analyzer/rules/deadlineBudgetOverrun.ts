@@ -8,8 +8,8 @@ import { formatMs, plural } from '../text';
 import {
   callTarget,
   cannotFinishWhenHealthy,
-  describeCall,
   findingId,
+  nameOf,
   isStarved,
   serviceTarget,
   budgetOrigin,
@@ -48,7 +48,10 @@ function callOverrun(context: RuleContext, edge: CallEdge, call: CallBudget): Fi
     rule: 'deadline-budget-overrun',
     severity: 'high',
     target,
-    title: `${describeCall(edge)} can outlast the time ${edge.caller} has for it`,
+    // "left" when earlier work or later calls already take part of the caller's time.
+    title:
+      `${nameOf(context.graph, edge)} can take ${formatMs(call.worstCaseMs)}, but ${edge.caller} has ` +
+      `${formatMs(call.shareMs)}${edge.index > 0 || call.reserveMs > 0 ? ' left' : ''} for it`,
     explanation:
       `${edge.caller} has ${formatMs(budgetMs)}: ${budgetOrigin(context, edge.caller)}. ${before} can take up to ${formatMs(call.elapsedBeforeMs)}` +
       `${reserve}, leaving ${formatMs(call.shareMs)} for this call. ${plural(maxAttempts, 'attempt')} of ` +
@@ -106,7 +109,7 @@ function tooSlowForBudget(context: RuleContext, service: string): Finding {
     rule: 'deadline-budget-overrun',
     severity: 'high',
     target,
-    title: `${service} cannot finish in the time it has, even when healthy`,
+    title: `${service} needs ${formatMs(healthyMs)} even when healthy, but gets ${formatMs(budgetMs)}`,
     explanation:
       `${service} has ${formatMs(budgetMs)} (${budgetOrigin(context, service)}), but it needs up to ${formatMs(healthyMs)} with no load (${formatMs(svcMaxMs)} of its own work, ` +
       'the rest in its calls). Every request can time out even on a quiet system. This needs faster services, ' +

@@ -5,7 +5,7 @@ import { effectiveBackoff } from '../budget';
 import { DEFAULT_BACKOFF, DEFAULT_RETRY_BUDGET } from '../defaults';
 import type { Finding, Patch } from '../finding';
 import { listPhrase } from '../text';
-import { callTarget, describeCall, findingId, type Rule } from './rule';
+import { callTarget, findingId, nameOf, type Rule } from './rule';
 
 export const unguardedRetries: Rule = {
   id: 'unguarded-retries',
@@ -17,19 +17,27 @@ export const unguardedRetries: Rule = {
       if (patches.length === 0) continue;
 
       const target = callTarget(edge);
-      const lacking = listPhrase(missing);
+      const lacking = listPhrase(missing, 'or');
+      const name = nameOf(graph, edge);
+      // Without a backoff delay, retries go out at once; with one but no jitter, they still go out in step.
+      const noDelay = missing.includes('backoff');
+      const withArticles = listPhrase(missing.map((guard) => (guard === 'retry budget' ? 'a retry budget' : guard)));
+      const effects = [
+        ...(noDelay ? ['immediately'] : []),
+        ...(missing.includes('jitter') ? ['in step with other clients'] : []),
+        ...(missing.includes('retry budget') ? ['without a limit'] : []),
+      ];
       findings.push({
         id: findingId('unguarded-retries', target),
         rule: 'unguarded-retries',
         severity: 'medium',
         target,
-        title: `${describeCall(edge)} retries without ${lacking}`,
+        title: noDelay ? `${name} retries immediately, with no ${lacking}` : `${name} retries with no ${lacking}`,
         explanation:
-          `${describeCall(edge)} makes up to ${edge.config.maxAttempts} attempts without ${lacking}. ` +
-          'Retries then go out immediately, in step with other clients, and without a limit, which adds load ' +
-          'exactly when the callee is struggling.',
+          `${name} makes up to ${edge.config.maxAttempts} attempts. Without ${withArticles}, retries go out ` +
+          `${listPhrase(effects)}, which adds load on ${edge.callee} exactly when it is struggling.`,
         evidence: { maxAttempts: edge.config.maxAttempts, missing: missing.join(', ') },
-        mitigation: { summary: `Add ${lacking}`, patches },
+        mitigation: { summary: `Add ${withArticles}`, patches },
       });
     }
     return findings;
@@ -64,7 +72,7 @@ function missingGuards(edge: CallEdge): { missing: string[]; patches: Patch[] } 
     }
   }
   if (!retryBudget) {
-    missing.push('a retry budget');
+    missing.push('retry budget');
     patches.push({ target, field: 'retryBudget', from: undefined, to: { ...DEFAULT_RETRY_BUDGET } });
   }
   return { missing, patches };

@@ -53,6 +53,13 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
   const [editorOpen, setEditorOpen] = useState(false);
   // A run still going when the page goes away is cancelled, so its worker does not linger.
   useEffect(() => () => running.current?.abort(), []);
+  // Set when a run finishes; the scroll waits for the results to render.
+  const scrollToResults = useRef(false);
+  useEffect(() => {
+    if (!scrollToResults.current) return;
+    scrollToResults.current = false;
+    simulateStep.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  });
 
   const system = useMemo(() => loadSystem(systemText), [systemText]);
   const scenario = useMemo(() => (system.ok ? loadScenario(scenarioText, system.value) : null), [system, scenarioText]);
@@ -78,6 +85,7 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
   const simulationKey = `${currentKey}\n${scenarioText}`;
   const canSimulate = analysis?.ok === true && scenario?.ok === true && simulation.kind !== 'running';
   const highlighted = findings.find((finding) => finding.id === highlightedId);
+  const isDemo = systemText === DEMO_SYSTEM_YAML && scenarioText === DEMO_SCENARIO_YAML;
   // The editor opens by itself when there is something to fix.
   const hasErrors = !system.ok || (scenario !== null && !scenario.ok);
   const showEditor = editorOpen || hasErrors;
@@ -104,8 +112,10 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
   async function applyAndSimulate() {
     if (!canSimulate || !system.ok || !scenario?.ok) return;
     const mitigated = mitigate();
-    simulateStep.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-    if (!mitigated) return;
+    if (!mitigated) {
+      mitigateStep.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     const controller = new AbortController();
     running.current = controller;
     const key = simulationKey;
@@ -120,6 +130,8 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
     } finally {
       if (running.current === controller) running.current = null;
     }
+    // Once there is something to see (results or an error), bring it into view; not after a cancel.
+    if (!controller.signal.aborted) scrollToResults.current = true;
   }
 
   function cancel() {
@@ -147,30 +159,34 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
       <header className="hero">
         <h1>Config Interaction Analyzer</h1>
         <p className="lede">
-          Each service's timeouts, retries and queues can look reasonable on their own and still fail together. This
-          tool finds those combinations, recommends a conservative change for each, and simulates both configs under
-          the same fault.
+          In a system of services, each team tunes its own settings, and each choice can be reasonable on its own while
+          the combination fails under stress. This tool analyzes a service call graph for settings that are risky
+          together, recommends a conservative change for each, and simulates both configurations under the same fault
+          to show the difference.
         </p>
+        <p className="lede-scope">This version covers resilience settings: timeouts, retries, backoff, deadlines and queues.</p>
         <div className="hero-action">
-          <p className="hero-status">
-            {!system.ok
-              ? 'Fix the system config to see its findings.'
-              : findings.length === 0
-                ? 'No findings in this config.'
-                : `${findings.length} ${findings.length === 1 ? 'finding' : 'findings'} across ${Object.keys(system.value.services).join(', ')}.`}
-          </p>
+          <HeroStatus
+            valid={system.ok}
+            services={system.ok ? Object.keys(system.value.services) : []}
+            high={findings.filter((finding) => finding.severity === 'high').length}
+            total={findings.length}
+          />
           {scenario?.ok === false ? (
             <button type="button" className="button-primary" disabled={!analysis?.ok || selected.size === 0} onClick={apply}>
               Apply {selected.size} {selected.size === 1 ? 'mitigation' : 'mitigations'}
             </button>
           ) : (
-            <button type="button" className="button-primary" disabled={!canSimulate} onClick={applyAndSimulate}>
-              {simulation.kind === 'running'
-                ? 'Simulating…'
-                : selected.size === 0
-                  ? 'Simulate the config'
-                  : `Apply ${selected.size} ${selected.size === 1 ? 'mitigation' : 'mitigations'} and simulate`}
-            </button>
+            <div className="shortcut">
+              <button type="button" className="button-primary" disabled={!canSimulate} onClick={applyAndSimulate}>
+                {simulation.kind === 'running'
+                  ? 'Simulating…'
+                  : shortcutLabel(isDemo, selected.size, findings.filter((finding) => finding.mitigation).length)}
+              </button>
+              <a className="walk-through" href="#step-configure">
+                or walk through the steps below <span aria-hidden="true">↓</span>
+              </a>
+            </div>
           )}
         </div>
       </header>
@@ -186,7 +202,7 @@ export function App({ runSimulation = runInWorker }: AppProps = {}) {
         </div>
         {!showEditor && (
           <p className="hint">
-            {systemText === DEMO_SYSTEM_YAML && scenarioText === DEMO_SCENARIO_YAML
+            {isDemo
               ? 'The demo is loaded: api calls orders, which calls db twice; the scenario slows db down 5× for 10 s. Edit it to try your own config.'
               : 'Your edited config is loaded.'}
           </p>
@@ -293,6 +309,33 @@ interface SimulationViewProps {
   readonly onRerun: () => void;
 }
 
+/**
+ * The top button is a shortcut through steps 3 and 4: "Quick demo: apply all 12 fixes and simulate" on the
+ * untouched demo, otherwise "Shortcut: apply 9 selected fixes and simulate".
+ */
+function shortcutLabel(isDemo: boolean, selected: number, fixable: number): string {
+  if (selected === 0) return 'Shortcut: simulate the config';
+  const fixes = selected === 1 ? 'fix' : 'fixes';
+  const which = selected === fixable ? `all ${selected}` : `${selected} selected`;
+  return `${isDemo ? 'Quick demo' : 'Shortcut'}: apply ${which} ${fixes} and simulate`;
+}
+
+/** The hook: how many findings, how many high, and on which services. */
+function HeroStatus({ valid, services, high, total }: { valid: boolean; services: string[]; high: number; total: number }) {
+  if (!valid) return <p className="hero-status">Fix the system config to see its findings.</p>;
+  if (total === 0) return <p className="hero-status">No findings: nothing in this config is risky in combination.</p>;
+  return (
+    <div className="hero-status">
+      <p className="hero-count">
+        {total} {total === 1 ? 'finding' : 'findings'}
+      </p>
+      <p className="hero-detail">
+        {high} high · {total - high} medium, across {services.join(', ')}.
+      </p>
+    </div>
+  );
+}
+
 function SimulationView({ state, stale, scenarioInvalid, selectedCount, onRerun }: SimulationViewProps) {
   if (scenarioInvalid) {
     return <p className="notice">The simulation needs a valid scenario. Fix the errors in the Scenario tab above.</p>;
@@ -308,10 +351,16 @@ function SimulationView({ state, stale, scenarioInvalid, selectedCount, onRerun 
   switch (state.kind) {
     case 'idle':
       return (
-        <p className="hint">
-          Runs the original and the mitigated config ({selectedCount} {selectedCount === 1 ? 'mitigation' : 'mitigations'})
-          on the same traffic, with and without the fault: four runs, a few seconds in all.
-        </p>
+        <div className="preview">
+          <p>
+            <strong>Results appear here:</strong> whether each config recovers from the fault, the numbers side by
+            side, and charts of both runs.
+          </p>
+          <p className="hint">
+            Runs the original and the mitigated config ({selectedCount} {selectedCount === 1 ? 'fix' : 'fixes'}) on the
+            same traffic, with and without the fault.
+          </p>
+        </div>
       );
     case 'running':
       return (

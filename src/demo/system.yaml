@@ -1,4 +1,4 @@
-# system.yaml — demo system (DESIGN.md §11.1)
+# The demo system: api calls orders, which calls db twice.
 # Each setting looks reasonable on its own; together they fail to recover from a short db slowdown.
 version: 1
 networkLatencyMs: 1
