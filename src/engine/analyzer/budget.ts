@@ -66,12 +66,20 @@ export class Budgets {
 
 /**
  * The backoff a call will have after mitigation: its own, or DEFAULT_BACKOFF when it retries without
- * one (or with baseMs 0). Calls with a single attempt never back off, so they keep what they have.
+ * one. A backoff with baseMs 0 gets the default base delay, and maxMs is raised to at least that, so the
+ * result stays valid (maxMs ≥ baseMs). Calls with a single attempt never back off, so they keep what they have.
+ * Rule 3 must patch exactly this; see DESIGN.md §7.
  */
 export function effectiveBackoff(call: CallConfig): BackoffConfig | undefined {
   if (call.maxAttempts <= 1) return call.backoff;
   if (!call.backoff) return DEFAULT_BACKOFF;
-  if (call.backoff.baseMs === 0) return { ...call.backoff, baseMs: DEFAULT_BACKOFF.baseMs };
+  if (call.backoff.baseMs === 0) {
+    return {
+      ...call.backoff,
+      baseMs: DEFAULT_BACKOFF.baseMs,
+      maxMs: Math.max(call.backoff.maxMs, DEFAULT_BACKOFF.baseMs),
+    };
+  }
   return call.backoff;
 }
 

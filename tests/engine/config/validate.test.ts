@@ -42,6 +42,7 @@ describe('validateSystem', () => {
     ['non-positive observed p99', (s) => (s.services.db.observedP99Ms = 0), 'services.db.observedP99Ms', /> 0/],
     ['non-boolean propagation', (s) => (s.services.db.deadlinePropagation = 'yes'), 'services.db.deadlinePropagation', /true or false/],
     ['zero attempts', (s) => (s.services.api.calls[0].maxAttempts = 0), 'services.api.calls[0].maxAttempts', /≥ 1/],
+    ['more than 100 attempts', (s) => (s.services.api.calls[0].maxAttempts = 101), 'services.api.calls[0].maxAttempts', /≤ 100/],
     ['timeout within the round trip', (s) => (s.services.api.calls[0].timeoutMs = 2), 'services.api.calls[0].timeoutMs', /round trip/],
     ['deadline within the round trip', (s) => (s.entry.deadlineMs = 2), 'entry.deadlineMs', /round trip/],
     ['backoff multiplier below 1', (s) => (s.services.api.calls[0].backoff = { baseMs: 10, multiplier: 0.5, maxMs: 100, jitter: 'full' }), 'services.api.calls[0].backoff.multiplier', /≥ 1/],

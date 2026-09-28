@@ -30,6 +30,9 @@ const NAME_RULE = 'must contain only letters, digits, "_" and "-"';
 /** Seeds feed a 32-bit hash. */
 const MAX_SEED = 2 ** 32 - 1;
 
+/** Generous for any real config, and it bounds the analyzer's per-attempt loops. */
+const MAX_ATTEMPTS = 100;
+
 /** Own-property lookup, so names such as "constructor" never match inherited object keys. */
 function hasService(services: Readonly<Record<string, unknown>>, name: string): boolean {
   return Object.hasOwn(services, name);
@@ -154,7 +157,7 @@ function readCall(r: FieldReader, raw: unknown, path: string, rttMs: number | un
   if (name !== undefined && !NAME_PATTERN.test(name)) r.error(childPath(path, 'name'), NAME_RULE);
   const to = r.string(obj, 'to', path);
   const timeoutMs = readDuration(r, obj, 'timeoutMs', path, rttMs);
-  const maxAttempts = r.number(obj, 'maxAttempts', path, { integer: true, min: 1 });
+  const maxAttempts = r.number(obj, 'maxAttempts', path, { integer: true, min: 1, max: MAX_ATTEMPTS });
   const backoff = obj.backoff === undefined ? undefined : readBackoff(r, obj.backoff, childPath(path, 'backoff'));
   const retryBudget =
     obj.retryBudget === undefined ? undefined : readRetryBudget(r, obj.retryBudget, childPath(path, 'retryBudget'));

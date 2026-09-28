@@ -15,6 +15,11 @@ export interface Target {
   call?: string;
 }
 
+/** "orders" or "orders.readStock": the target as it appears in ids and messages. */
+export function targetKey(target: Target): string {
+  return target.call === undefined ? target.service : `${target.service}.${target.call}`;
+}
+
 /** One field change. Only fields listed in mitigation/patchableFields.ts may be patched. */
 export interface Patch {
   target: Target;

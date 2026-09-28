@@ -47,6 +47,11 @@ export class CallGraph {
     return [...this.outgoing.keys()];
   }
 
+  /** Every call of every service, services in declaration order and calls in execution order. */
+  get calls(): readonly CallEdge[] {
+    return [...this.outgoing.values()].flat();
+  }
+
   /** Outgoing calls of a service, in execution order. */
   callsOf(service: string): readonly CallEdge[] {
     return this.outgoing.get(service) ?? [];

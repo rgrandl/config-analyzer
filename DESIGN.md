@@ -171,7 +171,7 @@ The rules:
   (`caller.call`) and error paths use them as separators. Names are looked up as own properties, so a name such as
   `constructor` never matches an inherited object key.
 - Ranges: `workers` integer ≥ 1; `queueCapacity` integer ≥ 0 or `unbounded`; `serviceTimeMs` > 0;
-  jitter in [0, 0.9]; `maxAttempts` integer ≥ 1; backoff `multiplier` ≥ 1, `baseMs` ≥ 0, `maxMs` ≥ `baseMs`;
+  jitter in [0, 0.9]; `maxAttempts` an integer in [1, 100] (it also bounds the analyzer's per-attempt loops); backoff `multiplier` ≥ 1, `baseMs` ≥ 0, `maxMs` ≥ `baseMs`;
   retry budget `ratio` in (0, 1], `maxTokens` ≥ 1; `observedP99Ms` > 0.
 - `timeoutMs` > rtt and `deadlineMs` > rtt, where rtt = 2 × `networkLatencyMs`.
 - Scenario: `rps` > 0; `durationMs` > 0; 0 ≤ `warmupMs` < `durationMs`; `seed` an integer in [0, 2³² − 1]
@@ -197,7 +197,7 @@ topological order. rtt = 2 × `networkLatencyMs`.
 | healthy(S) | svcMax(S) + Σ healthy(call) over S's calls | worst healthy latency, no queueing |
 | meanHealthy(S) | serviceTimeMs + Σ (rtt + meanHealthy(callee)) | throughput |
 | throughput(S) | min(workers / meanHealthy(S), min over callees C of throughput(C) / k(S,C)) | queue drain rate, in requests/ms; k = calls from S to C per job |
-| effectiveBackoff(call) | the call's own backoff; if it retries without one (or with `baseMs: 0`), the rule-3 defaults | worstCase |
+| effectiveBackoff(call) | the call's own backoff; if it retries without one, the rule-3 default; with `baseMs: 0`, its own backoff with `baseMs` → 10 and `maxMs` → max(maxMs, 10), so it stays valid | worstCase |
 | worstCase(call, n, t) | n × t + Σ effectiveBackoff delays for n − 1 retries, at their upper bound | rule 2, elapsedBefore |
 | floor(call) | multiplier × max(healthy(call), rtt + callee.observedP99Ms) | lowest safe timeout |
 | budget(S) | entry: deadlineMs − rtt; else min over incoming calls c of window(c); clamped at 0 | the time S really has |
@@ -247,22 +247,26 @@ orders budget: 898 ms
 | # | Rule id | Flags when | Severity | Single mitigation |
 |---|---|---|---|---|
 | 1 | `retry-amplification` | A call has `maxAttempts > 1` and some call reachable below its callee also retries | high | This call's `maxAttempts` → 1; only the deepest layer retries |
-| 2 | `deadline-budget-overrun` | worstCase(call) > share(call) | high | timeout ≤ share: `maxAttempts` → largest n that fits. timeout > share and share ≥ floor: `timeoutMs` → share (exact; the UI displays it rounded). Otherwise: none (unresolved) |
-| 3 | `unguarded-retries` | `maxAttempts > 1` and backoff, jitter or retry budget is missing: no `backoff` or `baseMs: 0` = no backoff; `jitter: none` = no jitter; no `retryBudget` = no budget | medium | Add what is missing: backoff 10 ms × 2 up to 100 ms (or `baseMs` → 10 if the object exists), `jitter: full`, retry budget ratio 0.1 with 10 tokens |
+| 2 | `deadline-budget-overrun` | worstCase(call) > share(call) | high | timeout ≤ share: `maxAttempts` → largest n that fits. timeout > share and share ≥ floor: `timeoutMs` → share (exact; the UI displays it rounded) and, if it retries, `maxAttempts` → 1, in the same mitigation, since a second attempt would need at least twice the share. Otherwise: none (unresolved) |
+| 3 | `unguarded-retries` | `maxAttempts > 1` and backoff, jitter or retry budget is missing: no `backoff` or `baseMs: 0` = no backoff; `jitter: none` = no jitter; no `retryBudget` = no budget | medium | Add what is missing: backoff 10 ms × 2 up to 100 ms (if the object exists with `baseMs: 0`: `baseMs` → 10 and `maxMs` → max(maxMs, 10)), `jitter: full`, retry budget ratio 0.1 with 10 tokens |
 | 4 | `missing-deadline-propagation` | `deadlinePropagation: false` | medium | Set it to `true` |
-| 5 | `dead-on-arrival-queue` | maxQueueWait(S) + healthy(S) > budget(S), including unbounded queues | high | `queueCapacity` → ⌊throughput × (budget − healthy) × 0.5⌋ (throughput in requests/ms), minimum 1. If budget ≤ healthy: none |
+| 5 | `dead-on-arrival-queue` | maxQueueWait(S) + healthy(S) > budget(S), including unbounded queues | high | `queueCapacity` → ⌊throughput × (budget − healthy) × 0.5⌋ (throughput in requests/ms), minimum 1. None if the cap would not be smaller than today's queue |
 
-Degenerate case: if `budget(S) − svcMax(S) ≤ 0`, the analyzer emits one service-level `deadline-budget-overrun`
-finding ("local work alone exceeds the time this service has") with no mitigation, and skips rule 2 and rule 5
-for that service.
+Too slow even when healthy: if `budget(S) < healthy(S)`, the service cannot finish in the time it has even with no
+load, because its callers' timeouts (or, for the entry, the user's deadline) are shorter than its own work plus its
+calls. The analyzer emits one service-level `deadline-budget-overrun` finding with no mitigation (raising timeouts is
+never automatic), and skips rule 2's per-call checks and rule 5 for that service. This covers local work alone
+exceeding the budget, and a timeout shorter than the callee's healthy latency. One shared helper decides it for both
+rules, so they cannot disagree.
 
 Starved services: a service whose budget is 0 got no time from its callers, because a caller's share was at or
-below the round trip. Rules 2 and 5 skip it; the caller's own finding explains the cause. Without this, one
-upstream problem would produce an unresolvable finding on every service below it.
+below the round trip. Rule 2 skips it entirely; the caller's own finding explains the cause. Without this, one
+upstream problem would produce an unresolvable finding on every service below it. Rule 5 needs no separate check:
+a budget of 0 is always below the healthy latency.
 
 Analyzer contracts: `effectiveBackoff` (§6) treats a missing backoff and `baseMs: 0` alike, so rule 3 must flag and
-patch both (`backoff` when absent, `backoff.baseMs` → 10 when 0). Otherwise the budgets would assume a backoff the
-mitigation never adds.
+patch both (`backoff` when absent; `backoff.baseMs` → 10 and, if needed, `backoff.maxMs` → 10 when `baseMs` is 0).
+The patches produce exactly `effectiveBackoff`, so the budgets never assume a backoff the mitigation does not add.
 
 Comparisons: rules compare times with a tolerance of 1e-9 ms (one shared helper), so a value that lands exactly on
 a boundary, such as a worst case equal to its share, is not flipped by floating-point noise.
@@ -312,6 +316,7 @@ flowchart LR
 | `maxAttempts` | call | lower | minimum |
 | `backoff` | call | add if absent | keep existing |
 | `backoff.baseMs` | call | higher (only ever raised from 0) | maximum |
+| `backoff.maxMs` | call | higher (raised to at least the new `baseMs`) | maximum |
 | `backoff.jitter` | call | `full` | `full` |
 | `retryBudget` | call | add if absent | keep existing |
 | `queueCapacity` | service | lower (`unbounded` is highest) | minimum |
@@ -323,8 +328,21 @@ the result would be 1.
 **Invariant (tested):** no patch raises a timeout, `maxAttempts`, a queue capacity, or the entry deadline.
 Backoff may increase (rule 3), which rule 2 accounts for in advance through `effectiveBackoff`.
 
-**Not guaranteed in general:** a clean re-run. Lowering a timeout shrinks the callee's budget and can create new
-findings, which the UI labels "new after mitigation". The demo re-runs clean.
+Applying mitigations (`applyMitigations`):
+
+1. Merge the selected findings' patches: one patch per field, the more conservative value wins. A patch to a field
+   outside the table, or in the wrong direction, throws: a faulty rule can never produce a less safe config.
+2. Apply them to a copy of the config. Each patch first checks the field still holds the value it expects.
+3. Validate the result. Mitigations only tighten valid settings, so an invalid result means a rule is wrong, and it
+   throws.
+4. Re-run the analyzer once and split its findings into **unresolved** (already present before) and **introduced**
+   (new).
+
+**Not guaranteed in general:** a clean re-run. Findings without a safe mitigation stay unresolved, and a partial
+selection leaves the unselected findings in place. Introduced findings are not expected with the current rules:
+mitigated timeouts equal the share (so windows do not shrink), fewer attempts only grow later shares, and queue caps,
+guards and deadline propagation do not change any budget. The split is kept so that a future rule that does shrink a
+budget is caught and shown. The demo re-runs clean.
 
 ## 9. Simulator
 
@@ -642,14 +660,16 @@ src/
       load.ts              loadSystem, loadScenario: parse + validate, for the UI
       callGraph.ts         the call graph, shared by validation, the analyzer and the simulator
     analyzer/
-      analyze.ts           entry point: analyze(config) → findings + budgets
+      analyze.ts           entry point: analyze(config) → Analysis (findings, budgets, graph)
       budget.ts            latencies, throughput, floors, budgets, shares (§6) → Budgets
-      defaults.ts          recommended values (e.g. the default backoff), shared by budgets and rules
-      finding.ts           Finding, Patch, Mitigation types
-      rules/               one file per rule; index.ts exports RULES, a plain array
+      defaults.ts          recommended values: default backoff, retry budget, queue headroom
+      compare.ts           exceeds / fits with a 1e-9 ms tolerance
+      text.ts              formatMs, plural, listPhrase for finding text
+      finding.ts           Finding, Patch, Mitigation, Target types
+      rules/               one file per rule; rule.ts holds the Rule type and helpers; index.ts exports RULES
       mitigation/
         patchableFields.ts the field table (§8)
-        applyMitigations.ts merge, apply, re-run once → MitigationResult
+        applyMitigations.ts merge, apply, validate, re-run once → MitigationResult (unresolved, introduced)
     simulator/
       types.ts             Runner, RunResult, BucketMetrics, ArrivalSource, client-policy types
       run.ts               the event loop: workers, queues, deadlines, faults
@@ -680,7 +700,8 @@ tests/                     mirrors src/; tests/engine/boundary.test.ts enforces 
   fast first call flowing to a later call; a greedy first call cannot push later calls below their floors; an
   overrunning first call does not cascade findings; a negative-budget service.
 - Rules: a positive and a negative case each; throughput limited by a callee; rule 2 accounting for rule-3 backoff;
-  a floor that binds (no mitigation); a "new after mitigation" case.
+  a floor that binds (no mitigation); the unresolved / introduced split (a unit test, since the current rules
+  cannot introduce findings); the tolerance on a value that floating point puts just below its boundary.
 - Demo: exactly the 12 findings of §11.3; 0 unresolved after one apply.
 - Registry (`patchableFields`): the never-raise invariant; patching an unlisted field fails.
 - Boundary: no file under `src/engine/` imports React, charting, or code outside the engine.

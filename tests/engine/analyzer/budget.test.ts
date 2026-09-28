@@ -32,6 +32,13 @@ describe('effectiveBackoff and worstCaseMs', () => {
     expect(effectiveBackoff(zeroBase)).toEqual({ baseMs: 10, multiplier: 3, maxMs: 90, jitter: 'none' });
   });
 
+  it('raises maxMs with a zero base delay so the backoff stays valid', () => {
+    // Plan: take a retrying call whose backoff is baseMs 0 and maxMs 0, which is valid but never waits.
+    // Verifies: the effective backoff is baseMs 10 and maxMs 10, keeping maxMs ≥ baseMs.
+    const zeros = call('c', 'x', { maxAttempts: 2, backoff: { baseMs: 0, multiplier: 2, maxMs: 0, jitter: 'full' } });
+    expect(effectiveBackoff(zeros)).toMatchObject({ baseMs: 10, maxMs: 10 });
+  });
+
   it('adds no backoff for a single attempt', () => {
     // Plan: take a 1-attempt call with no backoff.
     // Verifies: no backoff is assumed, and the worst case is just the timeout.
